@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>My Start Page</title>
+  <meta name="description" content="A customizable start page. Add widgets, drag them around, make it yours.">
+  <meta name="theme-color" content="#0f1115">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1 id="greeting">My Start Page</h1>
+    <div class="actions">
+      <button id="btn-add" class="btn primary" type="button">+ Add widget</button>
+      <button id="btn-edit" class="btn" type="button" aria-pressed="false">Edit layout</button>
+      <button id="btn-settings" class="btn" type="button" aria-label="Settings">⚙</button>
+    </div>
+  </header>
+
+  <main id="grid" class="grid" aria-live="polite"></main>
+
+  <!-- Ad slot: paste your ad network's zone/script here (see README) -->
+  <aside id="ad-slot" class="ad-slot" aria-label="Advertisement"></aside>
+
+  <footer class="foot">
+    Data from free public APIs (Open-Meteo, Hacker News, Wikipedia, NASA, Open Trivia DB, TheCocktailDB).
+  </footer>
+
+  <dialog id="dlg-add">
+    <form method="dialog">
+      <h2>Add a widget</h2>
+      <div id="widget-catalog" class="catalog"></div>
+      <menu><button class="btn" value="close">Close</button></menu>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-settings">
+    <form method="dialog">
+      <h2>Settings</h2>
+      <label class="row">Theme
+        <select id="set-theme">
+          <option value="auto">Auto</option>
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+        </select>
+      </label>
+      <p class="hint">Your layout is saved in this browser. Copy it to move it to another device or share it.</p>
+      <textarea id="set-json" rows="6" spellcheck="false" aria-label="Layout JSON"></textarea>
+      <div class="row">
+        <button class="btn" id="btn-export" type="button">Copy layout</button>
+        <button class="btn" id="btn-import" type="button">Load layout from box</button>
+        <button class="btn danger" id="btn-reset" type="button">Reset</button>
+      </div>
+      <p id="set-msg" class="hint" role="status"></p>
+      <menu><button class="btn" value="close">Close</button></menu>
+    </form>
+  </dialog>
+
+  <script src="widgets.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
