@@ -11,7 +11,7 @@ DEFAULT_SETTINGS = {
     "llm_model": "llama3.1:8b",
     "llm_temperature": 0.9,
     # Images
-    "image_engine": "comfyui",           # comfyui | a1111 | cards (no AI, styled backgrounds)
+    "image_engine": "cards",             # cards (no AI, styled backgrounds) | comfyui | a1111 — start simple, switch once ComfyUI is installed
     "image_url": "http://127.0.0.1:8188",
     "comfy_checkpoint": "sd_xl_base_1.0.safetensors",
     "comfy_workflow_path": "",           # optional custom API-format workflow JSON
