@@ -12,6 +12,7 @@ class TTSError(RuntimeError):
 
 
 def _piper(text, out, model_path):
+    model_path = str(Path(model_path).expanduser()) if model_path else ""
     if not model_path or not Path(model_path).is_file():
         raise TTSError("Piper voice model not found. Set the .onnx path in Settings > Voice.")
     try:
@@ -65,9 +66,12 @@ def check(settings):
             import piper.voice  # noqa: F401  # type: ignore
         except ImportError:
             return False, "piper-tts not installed"
-        if not settings["piper_model"] or not Path(settings["piper_model"]).is_file():
-            return False, "Piper voice model path not set"
-        return True, Path(settings["piper_model"]).name
+        model = Path(settings["piper_model"]).expanduser() if settings["piper_model"] else None
+        if not model or not model.is_file():
+            return False, "Piper voice file not found — check the path in Settings > Voice"
+        if not model.with_name(model.name + ".json").is_file():
+            return False, f"Missing {model.name}.json next to the voice file"
+        return True, model.name
     try:
         import pyttsx3  # noqa: F401
     except ImportError:

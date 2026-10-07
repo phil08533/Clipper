@@ -105,7 +105,7 @@ def adjust_voice(settings, src, out):
 def pick_music(music_dir):
     if not music_dir:
         return None
-    d = Path(music_dir)
+    d = Path(music_dir).expanduser()
     if not d.is_dir():
         return None
     tracks = [p for p in d.iterdir() if p.suffix.lower() in (".mp3", ".wav", ".m4a", ".ogg", ".flac")]

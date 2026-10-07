@@ -44,7 +44,7 @@ def _fill(node, values):
 def _comfy(settings, prompt, out, seed):
     base = settings["image_url"].rstrip("/")
     wf_path = settings["comfy_workflow_path"]
-    workflow = json.loads(Path(wf_path).read_text(encoding="utf-8")) if wf_path else DEFAULT_COMFY_WORKFLOW
+    workflow = json.loads(Path(wf_path).expanduser().read_text(encoding="utf-8")) if wf_path else DEFAULT_COMFY_WORKFLOW
     graph = _fill(workflow, {
         "prompt": prompt, "negative": settings["negative_prompt"], "seed": seed,
         "steps": settings["image_steps"], "width": settings["image_width"], "height": settings["image_height"],
