@@ -1,6 +1,6 @@
 """Shared browser plumbing for the platform uploaders.
 
-Each platform gets its own persistent browser profile under data/browser_profiles/<platform>.
+Each account gets its own persistent browser profile under data/browser_profiles/<profile>.
 You sign in once yourself (in a normal browser window, not under automation); Playwright then
 reuses that signed-in profile to post. Passwords are never stored by this app.
 """
@@ -15,7 +15,14 @@ from pathlib import Path
 
 from .. import db
 
-LOCKS = {p: threading.Lock() for p in ("youtube", "tiktok", "instagram")}
+_locks = {}
+_locks_guard = threading.Lock()
+
+
+def lock_for(account):
+    """One browser per profile at a time; different accounts can run in parallel."""
+    with _locks_guard:
+        return _locks.setdefault(account["profile"], threading.Lock())
 
 
 class NotLoggedIn(RuntimeError):
@@ -26,8 +33,8 @@ class Unconfirmed(RuntimeError):
     """The post was submitted but success could not be verified. Never auto-retried, to avoid duplicates."""
 
 
-def profile_dir(platform):
-    return db.PROFILES_DIR / platform
+def profile_dir(account):
+    return db.PROFILES_DIR / account["profile"]
 
 
 def _candidates(channel):
@@ -55,27 +62,27 @@ def browser_executable(settings):
         return p.chromium.executable_path, "chromium"
 
 
-def open_login_window(settings, platform, url):
+def open_login_window(settings, account, url):
     """Launches a plain (non-automated) browser on the platform's profile and waits until the user closes it."""
     exe, _ = browser_executable(settings)
-    d = profile_dir(platform)
+    d = profile_dir(account)
     d.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen([exe, f"--user-data-dir={d}", "--no-first-run", "--no-default-browser-check", "--new-window", url])
     proc.wait(timeout=3600)
 
 
 @contextmanager
-def session(settings, platform, headless=None):
+def session(settings, account, headless=None):
     from playwright.sync_api import sync_playwright
 
-    lock = LOCKS[platform]
+    lock = lock_for(account)
     if not lock.acquire(timeout=3600):
-        raise RuntimeError(f"{platform} browser is busy")
+        raise RuntimeError(f"{account['label']} browser is busy")
     try:
         exe, channel = browser_executable(settings)
         with sync_playwright() as p:
             ctx = p.chromium.launch_persistent_context(
-                str(profile_dir(platform)),
+                str(profile_dir(account)),
                 executable_path=exe if channel != "chromium" else None,
                 headless=settings["headless"] if headless is None else headless,
                 viewport={"width": 1366, "height": 900},
@@ -87,9 +94,9 @@ def session(settings, platform, headless=None):
                 yield page
             except Exception:
                 try:
-                    shot = db.SHOTS_DIR / f"{platform}_{int(time.time())}.png"
+                    shot = db.SHOTS_DIR / f"{account['profile']}_{int(time.time())}.png"
                     page.screenshot(path=str(shot), full_page=True)
-                    db.log("warn", platform, f"Saved screenshot of the failure: screenshots/{shot.name}")
+                    db.log("warn", account["platform"], f"{account['label']}: saved screenshot of the failure: screenshots/{shot.name}")
                 except Exception:  # noqa: BLE001
                     pass
                 raise

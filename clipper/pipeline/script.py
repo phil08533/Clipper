@@ -25,13 +25,27 @@ Requirements:
 - Topic: {topic_line}
 - Exactly {scenes} scenes. Total narration about {words} words (~{duration} seconds spoken).
 - Today is {date}.
-{avoid}"""
+{avoid}{series}"""
 
 
-def render_user_prompt(template, niche, topic, scenes, duration, recent_titles):
+def series_block(series):
+    """series = {"bible": str, "number": int, "episodes": [(title, synopsis), ...] oldest first}."""
+    if not series or not series.get("bible"):
+        return ""
+    lines = ["", "STORY WORLD (canon — never contradict it):", series["bible"].strip(), ""]
+    if series.get("episodes"):
+        lines.append("PREVIOUS EPISODES (oldest first):")
+        lines += [f"- {t}: {syn}" for t, syn in series["episodes"]]
+    else:
+        lines.append("This is the very first episode: introduce the main character and the central mystery.")
+    lines.append(f"Write episode {series['number']}. Continue directly from the last episode.")
+    return "\n".join(lines)
+
+
+def render_user_prompt(template, niche, topic, scenes, duration, recent_titles, series=None):
     words = int(duration * 2.5)
     avoid = ""
-    if recent_titles:
+    if recent_titles and not (series and series.get("bible")):
         avoid = "- Do NOT repeat or closely resemble these recent videos:\n" + "\n".join(f"  * {t}" for t in recent_titles[:30])
     return USER.format(
         template=template.replace("{niche}", niche or "general interest")
@@ -41,6 +55,7 @@ def render_user_prompt(template, niche, topic, scenes, duration, recent_titles):
         scenes=scenes, words=words, duration=duration,
         date=datetime.date.today().strftime("%B %d, %Y"),
         avoid=avoid,
+        series=series_block(series),
     )
 
 
@@ -67,8 +82,8 @@ def validate(data, scenes_wanted):
     }
 
 
-def generate(settings, template, niche, topic, scenes, duration, recent_titles=(), attempts=3):
-    user = render_user_prompt(template, niche, topic, scenes, duration, list(recent_titles))
+def generate(settings, template, niche, topic, scenes, duration, recent_titles=(), attempts=3, series=None):
+    user = render_user_prompt(template, niche, topic, scenes, duration, list(recent_titles), series)
     last = None
     for _ in range(attempts):
         try:

@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
   enabled INTEGER NOT NULL DEFAULT 0,
   config TEXT NOT NULL,
   next_post_at REAL,
+  schedule_plan TEXT,
   topic_cursor INTEGER NOT NULL DEFAULT 0,
   created_at REAL NOT NULL,
   updated_at REAL NOT NULL
@@ -57,6 +58,7 @@ CREATE INDEX IF NOT EXISTS videos_status ON videos(status);
 CREATE TABLE IF NOT EXISTS posts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   video_id INTEGER NOT NULL,
+  account_id INTEGER NOT NULL,
   platform TEXT NOT NULL,
   status TEXT NOT NULL,
   url TEXT,
@@ -64,14 +66,18 @@ CREATE TABLE IF NOT EXISTS posts (
   attempts INTEGER NOT NULL DEFAULT 0,
   next_attempt_at REAL,
   updated_at REAL NOT NULL,
-  UNIQUE(video_id, platform)
+  UNIQUE(video_id, account_id)
 );
 
 CREATE TABLE IF NOT EXISTS accounts (
-  platform TEXT PRIMARY KEY,
-  status TEXT NOT NULL,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  platform TEXT NOT NULL,
+  label TEXT NOT NULL,
+  profile TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'not_connected',
   note TEXT,
-  checked_at REAL
+  checked_at REAL,
+  created_at REAL NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS logs (
@@ -85,12 +91,61 @@ CREATE TABLE IF NOT EXISTS logs (
 """
 
 
+PLATFORM_NAMES = {"youtube": "YouTube", "tiktok": "TikTok", "instagram": "Instagram"}
+
+
+def _columns(c, table):
+    return {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
+
+
 def init():
     for d in (DATA_DIR, VIDEOS_DIR, PROFILES_DIR, SHOTS_DIR):
         d.mkdir(parents=True, exist_ok=True)
-    with connect() as c:
+    with _write_lock, connect() as c:
+        # v1 had one account per platform; move those tables aside before creating the new ones.
+        old_accounts = "platform" in _columns(c, "accounts") and "id" not in _columns(c, "accounts")
+        old_posts = _columns(c, "posts") and "account_id" not in _columns(c, "posts")
+        if old_accounts:
+            c.execute("ALTER TABLE accounts RENAME TO accounts_v1")
+        if old_posts:
+            c.execute("ALTER TABLE posts RENAME TO posts_v1")
         c.executescript(SCHEMA)
         c.execute("PRAGMA journal_mode=WAL")
+        if "schedule_plan" not in _columns(c, "campaigns"):
+            c.execute("ALTER TABLE campaigns ADD COLUMN schedule_plan TEXT")
+        _migrate_v1(c, old_accounts, old_posts)
+
+
+def _migrate_v1(c, old_accounts, old_posts):
+    ids = {}
+    if old_accounts or old_posts:
+        rows = {r["platform"]: dict(r) for r in c.execute("SELECT * FROM accounts_v1")} if old_accounts else {}
+        for platform, name in PLATFORM_NAMES.items():
+            row = rows.get(platform)
+            if row or (PROFILES_DIR / platform).is_dir():
+                cur = c.execute("INSERT INTO accounts (platform, label, profile, status, note, checked_at, created_at) VALUES (?,?,?,?,?,?,?)",
+                                (platform, name, platform, row["status"] if row else "not_connected",
+                                 row["note"] if row else None, row["checked_at"] if row else None, time.time()))
+                ids[platform] = cur.lastrowid
+    if old_posts:
+        for r in c.execute("SELECT * FROM posts_v1").fetchall():
+            if r["platform"] not in ids:
+                cur = c.execute("INSERT INTO accounts (platform, label, profile, created_at) VALUES (?,?,?,?)",
+                                (r["platform"], PLATFORM_NAMES.get(r["platform"], r["platform"]), r["platform"], time.time()))
+                ids[r["platform"]] = cur.lastrowid
+            c.execute("INSERT OR IGNORE INTO posts (video_id, account_id, platform, status, url, error, attempts, next_attempt_at, updated_at) "
+                      "VALUES (?,?,?,?,?,?,?,?,?)", (r["video_id"], ids[r["platform"]], r["platform"], r["status"], r["url"],
+                                                     r["error"], r["attempts"], r["next_attempt_at"], r["updated_at"]))
+        c.execute("DROP TABLE posts_v1")
+    if old_accounts:
+        c.execute("DROP TABLE accounts_v1")
+    # v1 campaigns listed platforms; v2 lists accounts.
+    for camp in c.execute("SELECT id, config FROM campaigns").fetchall():
+        cfg = loads(camp["config"], {})
+        if "accounts" not in cfg:
+            cfg["accounts"] = [i for p, i in ids.items() if p in cfg.get("platforms", [])]
+            cfg.pop("platforms", None)
+            c.execute("UPDATE campaigns SET config=? WHERE id=?", (json.dumps(cfg), camp["id"]))
 
 
 @contextmanager

@@ -9,15 +9,33 @@ then posts.
   (LM Studio, llama.cpp). Images come from [ComfyUI](https://github.com/comfyanonymous/ComfyUI) or
   Stable Diffusion WebUI / Forge. Voices come from [Piper](https://github.com/rhasspy/piper).
   No cloud keys and no per-video cost.
-- **Campaigns.** Each campaign is a content series with its own:
-  - niche, prompt and topic list
-  - visual style, caption style and music
-  - platforms, posts per day, posting window, days of the week and random timing offset
+- **Ready-made workflows.** Pick one and every setting is filled in: niche, prompt, topic list, visual
+  style, captions, length and schedule. You only choose which accounts it posts to.
+
+  | Workflow | What it makes |
+  |---|---|
+  | Mythology & Folklore | Traditional myths retold as short stories (40 legends included) |
+  | Short Horror Stories | Original first-person horror with a twist (30 story seeds) |
+  | What If…? | Science hypotheticals told second by second, then year by year (30 questions) |
+  | A Day in History (POV) | "You are a Roman legionary…": immersive days from history (30 roles) |
+  | Original Story Series | An ongoing fantasy saga; each video is the next episode, with the story so far fed back in |
+  | Start from scratch | Your own niche and prompt |
+
+- **Many campaigns, many accounts.**
+  - Add as many accounts as you like, including several per platform. Each keeps its own sign-in.
+  - Each campaign posts to any mix of accounts.
+  - Campaigns run side by side.
+  - Different accounts upload in parallel. How many at once is set in Settings.
+- **Random or even schedules.**
+  - *Random*: a different number of posts each day (e.g. 1–3) at random times, with a minimum gap
+    between posts.
+  - *Even*: a fixed number per day, spaced out with a small random offset.
+  - Both modes use a daily time window and chosen days of the week.
 - **Prompts you control.** You write the creative direction yourself and can test it against your model
   before using it. Clipper adds the output format, length and repeat-avoidance rules automatically.
 - **Review or full autopilot.** Videos can wait for your approval, or post with no human in the loop.
 - **Safe defaults.**
-  - A daily cap limits how many posts go out across all campaigns.
+  - A per-account daily cap holds extra posts until the next day.
   - Failed posts retry with back-off.
   - Uploads that can't be confirmed are never retried automatically, so nothing gets double-posted.
   - Failures save a screenshot.
@@ -60,13 +78,17 @@ The first launch creates a virtual environment and installs everything. Then the
 
 1. **Settings.** Point Clipper at your script model, image engine and Piper voice. The Overview page's
    *System check* turns green when each piece is reachable.
-2. **Accounts.** Click **Connect** for each platform. A normal browser window opens. Sign in as usual
-   (2FA included), then close the window. Clipper keeps that browser profile in `data/browser_profiles/`.
-   It never sees or stores your password.
-3. **Prompts.** Edit the four starter prompts or write your own. Use **Test this prompt** to see what your
-   model produces.
-4. **Campaigns.** Create one. Pick a niche, prompt, platforms and schedule, then press
-   **Generate a video now** and watch it render in the **Library**.
+2. **Accounts.** Add each channel you want to post to, for example "Myths TikTok" and "Horror TikTok".
+   Then click **Connect** on each one. A normal browser window opens for that account only. Sign in as
+   usual (2FA included), then close the window. Each account's session lives in its own folder under
+   `data/browser_profiles/`. Clipper never sees or stores your password. If one Google login owns several
+   YouTube channels, add one account per channel and switch to the right channel before closing the
+   window.
+3. **Prompts (optional).** Workflows come with their own prompts. To write your own, use the Prompts
+   page, where **Test this prompt** shows what your model produces.
+4. **Campaigns.** Click **New campaign**, pick a workflow, tick the accounts it should post to, and
+   create it. Then press **Generate a video now** and watch it render in the **Library**. Repeat for as
+   many campaigns as you want.
 5. **Autopilot.** Flip the switch in the sidebar. Clipper keeps each campaign's buffer of videos generated
    ahead and posts at the scheduled times. Turn off **Hold videos for my approval** in a campaign when
    you're happy with its output.
@@ -81,6 +103,10 @@ The first launch creates a virtual environment and installs everything. Then the
 
 Clipper must be running, and the PC awake, for posts to go out on time. A missed slot posts as soon as it's
 running again.
+
+**Throughput.** Videos are generated one at a time, because the GPU is shared. So total output across
+all campaigns is limited by render speed. At about 3 minutes per video, that's roughly 20 videos an hour.
+Uploads to different accounts run in parallel.
 
 ## When something breaks
 

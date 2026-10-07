@@ -1,4 +1,5 @@
 """HTTP API + static UI. Bound to localhost only."""
+import datetime
 import json
 import shutil
 from pathlib import Path
@@ -7,9 +8,8 @@ from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import db, health, publisher, scheduler, settings as settings_mod
+from . import db, health, presets, publisher, scheduler, settings as settings_mod
 from .pipeline import llm, script
-from .uploaders import PLATFORMS
 
 WEB = Path(__file__).resolve().parent / "web"
 app = FastAPI(title="Clipper", docs_url=None, redoc_url=None)
@@ -30,9 +30,19 @@ def _video_out(v):
     return v
 
 
+def _accounts_brief(ids):
+    if not ids:
+        return []
+    rows = {a["id"]: a for a in db.query(f"SELECT id, platform, label, status FROM accounts WHERE id IN ({','.join('?' * len(ids))})", ids)}
+    return [rows[i] for i in ids if i in rows]
+
+
 def _campaign_out(c):
     c = dict(c)
     c["config"] = settings_mod.campaign_config(db.loads(c["config"], {}))
+    c["accounts"] = _accounts_brief(c["config"]["accounts"])
+    plan = db.loads(c.pop("schedule_plan", None), None) or {}
+    c["upcoming"] = ([c["next_post_at"]] if c["next_post_at"] else []) + plan.get("times", [])
     c["counts"] = {r["status"]: r["n"] for r in db.query(
         "SELECT status, COUNT(*) n FROM videos WHERE campaign_id=? GROUP BY status", (c["id"],))}
     return c
@@ -49,17 +59,19 @@ def overview():
     return {
         "autopilot": s["autopilot"],
         "worker": scheduler.state,
-        "posted_today": publisher.posted_today(),
-        "daily_cap": s["max_posts_per_day"],
+        "posted_today": stat("SELECT COUNT(*) n FROM posts WHERE status='posted' AND updated_at>=?",
+                             datetime.datetime.combine(datetime.date.today(), datetime.time()).timestamp()),
+        "account_cap": s["max_posts_per_account"],
+        "accounts": db.one("SELECT COUNT(*) n FROM accounts")["n"],
         "stats": {
             "posted_7d": stat("SELECT COUNT(*) n FROM posts WHERE status='posted' AND updated_at>=?", week),
             "ready": stat("SELECT COUNT(*) n FROM videos WHERE status IN ('ready','approved')"),
             "review": stat("SELECT COUNT(*) n FROM videos WHERE status='needs_review'"),
             "failed_24h": stat("SELECT COUNT(*) n FROM logs WHERE level='error' AND ts>=?", day),
         },
-        "campaigns": [{"id": c["id"], "name": c["name"], "enabled": bool(c["enabled"]), "next_post_at": c["next_post_at"],
-                       "platforms": settings_mod.campaign_config(db.loads(c["config"], {}))["platforms"]}
-                      for c in db.query("SELECT * FROM campaigns ORDER BY name")],
+        "campaigns": [{"id": c["id"], "name": c["name"], "enabled": c["enabled"], "next_post_at": c["next_post_at"],
+                       "accounts": c["accounts"], "schedule_mode": c["config"]["schedule_mode"]}
+                      for c in map(_campaign_out, db.query("SELECT * FROM campaigns ORDER BY name"))],
         "recent": [_video_out(v) for v in db.query("SELECT * FROM videos ORDER BY id DESC LIMIT 6")],
         "activity": db.query("SELECT * FROM logs ORDER BY id DESC LIMIT 12"),
     }
@@ -75,7 +87,7 @@ def set_autopilot(body: dict = Body(...)):
     on = bool(body.get("on"))
     settings_mod.update({"autopilot": on})
     if on:
-        db.execute("UPDATE campaigns SET next_post_at=NULL")  # schedule fresh from now
+        db.execute("UPDATE campaigns SET next_post_at=NULL, schedule_plan=NULL")  # schedule fresh from now
     db.log("info", "autopilot", "Autopilot started" if on else "Autopilot paused")
     return {"autopilot": on}
 
@@ -90,6 +102,22 @@ def list_campaigns():
 @app.get("/api/campaigns/defaults")
 def campaign_defaults():
     return settings_mod.DEFAULT_CAMPAIGN
+
+
+@app.get("/api/presets")
+def list_presets():
+    return presets.summary()
+
+
+@app.post("/api/presets/{key}/apply")
+def apply_preset(key: str):
+    """Full campaign config for a preset, creating its prompt if it doesn't exist yet."""
+    p = next((x for x in presets.summary() if x["key"] == key), None) or _404("Unknown preset")
+    row = db.one("SELECT id FROM prompts WHERE name=?", (p["prompt_name"],))
+    pid = row["id"] if row else db.execute("INSERT INTO prompts (name, body, created_at, updated_at) VALUES (?,?,?,?)",
+                                           (p["prompt_name"], p["prompt"], db.now(), db.now()))
+    cfg = settings_mod.campaign_config({**p["config"], "prompt_id": pid, "preset": key})
+    return {"name": p["name"], "config": cfg}
 
 
 @app.post("/api/campaigns")
@@ -115,7 +143,7 @@ def update_campaign(cid: int, body: dict = Body(...)):
     name = str(body.get("name", c["name"])).strip()[:120] or c["name"]
     cfg = settings_mod.campaign_config(body["config"]) if "config" in body else db.loads(c["config"], {})
     enabled = int(bool(body.get("enabled", c["enabled"])))
-    db.execute("UPDATE campaigns SET name=?, enabled=?, config=?, next_post_at=NULL, updated_at=? WHERE id=?",
+    db.execute("UPDATE campaigns SET name=?, enabled=?, config=?, next_post_at=NULL, schedule_plan=NULL, updated_at=? WHERE id=?",
                (name, enabled, json.dumps(cfg), db.now(), cid))
     return _campaign_out(db.one("SELECT * FROM campaigns WHERE id=?", (cid,)))
 
@@ -190,10 +218,13 @@ def list_videos(status: str = "", campaign_id: int = 0, limit: int = 200):
 def get_video(vid: int):
     v = db.one("SELECT * FROM videos WHERE id=?", (vid,)) or _404()
     out = _video_out(v)
-    out["posts"] = db.query("SELECT * FROM posts WHERE video_id=? ORDER BY platform", (vid,))
+    out["posts"] = db.query("SELECT * FROM posts WHERE video_id=?", (vid,))
     c = db.one("SELECT name, config FROM campaigns WHERE id=?", (v["campaign_id"],))
     out["campaign_name"] = c["name"] if c else "(deleted)"
-    out["platforms"] = settings_mod.campaign_config(db.loads(c["config"], {}) if c else {})["platforms"]
+    targets = settings_mod.campaign_config(db.loads(c["config"], {}) if c else {})["accounts"]
+    # Show every account the campaign posts to, plus any account it already posted to before a change.
+    extra = [p["account_id"] for p in out["posts"] if p["account_id"] not in targets]
+    out["targets"] = _accounts_brief(targets + extra)
     return out
 
 
@@ -212,7 +243,7 @@ def update_video(vid: int, body: dict = Body(...)):
 
 @app.post("/api/videos/{vid}/{action}")
 def video_action(vid: int, action: str, body: dict = Body(default={})):
-    v = db.one("SELECT * FROM videos WHERE id=?", (vid,)) or _404()
+    db.one("SELECT id FROM videos WHERE id=?", (vid,)) or _404()
     if action == "approve":
         db.execute("UPDATE videos SET status='approved', updated_at=? WHERE id=?", (db.now(), vid))
     elif action == "reject":
@@ -222,14 +253,15 @@ def video_action(vid: int, action: str, body: dict = Body(default={})):
         db.execute("UPDATE videos SET status='queued', title='', error=NULL, posted_at=NULL, updated_at=? WHERE id=?", (db.now(), vid))
         scheduler.enqueue_generation(vid)
     elif action == "post":
-        platforms = [p for p in body.get("platforms") or [] if p in PLATFORMS] or None
-        if platforms:  # an explicit re-post of a platform resets its attempts
-            for p in platforms:
-                db.execute("UPDATE posts SET status='pending', attempts=0, error=NULL WHERE video_id=? AND platform=? AND status!='posted'", (vid, p))
-        scheduler.enqueue_post(vid, platforms, manual=True)
+        ids = [int(a) for a in body.get("accounts") or []] or None
+        if ids:  # an explicit re-post to an account resets its attempts
+            for aid in ids:
+                db.execute("UPDATE posts SET status='pending', attempts=0, error=NULL, next_attempt_at=NULL "
+                           "WHERE video_id=? AND account_id=? AND status!='posted'", (vid, aid))
+        scheduler.enqueue_post(vid, ids, manual=True)
     elif action == "mark_posted":
-        p = body.get("platform")
-        db.execute("UPDATE posts SET status='posted', error=NULL, updated_at=? WHERE video_id=? AND platform=?", (db.now(), vid, p))
+        db.execute("UPDATE posts SET status='posted', error=NULL, updated_at=? WHERE video_id=? AND account_id=?",
+                   (db.now(), vid, int(body.get("account_id") or 0)))
         publisher.refresh_video_status(vid)
     else:
         _404("Unknown action")
@@ -246,24 +278,50 @@ def delete_video(vid: int):
 
 # ---------- accounts ----------
 
+def _account_out(a):
+    a = dict(a)
+    a["posted"] = db.one("SELECT COUNT(*) n FROM posts WHERE account_id=? AND status='posted'", (a["id"],))["n"]
+    a["posted_today"] = publisher.posted_today(a["id"])
+    a["campaigns"] = [c["name"] for c in db.query("SELECT name, config FROM campaigns ORDER BY name")
+                      if a["id"] in db.loads(c["config"], {}).get("accounts", [])]
+    return a
+
+
 @app.get("/api/accounts")
 def accounts():
-    rows = {a["platform"]: a for a in db.query("SELECT * FROM accounts")}
-    out = []
-    for key, mod in PLATFORMS.items():
-        a = rows.get(key, {"status": "not_connected", "note": None, "checked_at": None})
-        out.append({"platform": key, "name": mod.NAME, "status": a["status"], "note": a["note"], "checked_at": a["checked_at"],
-                    "posted": db.one("SELECT COUNT(*) n FROM posts WHERE platform=? AND status='posted'", (key,))["n"]})
-    return out
+    return [_account_out(a) for a in db.query("SELECT * FROM accounts ORDER BY platform, label")]
 
 
-@app.post("/api/accounts/{platform}/{action}")
-def account_action(platform: str, action: str):
-    if platform not in PLATFORMS:
-        _404()
+@app.post("/api/accounts")
+def add_account(body: dict = Body(...)):
+    try:
+        return _account_out(publisher.create_account(str(body.get("platform")), str(body.get("label") or "")))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.put("/api/accounts/{aid}")
+def rename_account(aid: int, body: dict = Body(...)):
+    publisher.get_account(aid) or _404()
+    label = str(body.get("label") or "").strip()[:80]
+    if label:
+        db.execute("UPDATE accounts SET label=? WHERE id=?", (label, aid))
+    return _account_out(publisher.get_account(aid))
+
+
+@app.delete("/api/accounts/{aid}")
+def remove_account(aid: int):
+    publisher.get_account(aid) or _404()
+    publisher.delete_account(aid)
+    return {"ok": True}
+
+
+@app.post("/api/accounts/{aid}/{action}")
+def account_action(aid: int, action: str):
+    publisher.get_account(aid) or _404()
     fn = {"connect": publisher.connect_account, "check": publisher.check_account,
           "disconnect": publisher.disconnect_account}.get(action) or _404("Unknown action")
-    publisher.run_in_thread(fn, platform)
+    publisher.run_in_thread(fn, aid)
     return {"ok": True}
 
 

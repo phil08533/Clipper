@@ -24,6 +24,20 @@ def _next_topic(campaign, cfg):
     return topics[idx]
 
 
+def _series(campaign, cfg, video_id):
+    """Previous episodes for an episodic campaign, so the model continues the same story."""
+    if not cfg["series_bible"].strip():
+        return None
+    eps = db.query("SELECT title, script FROM videos WHERE campaign_id=? AND id<? AND script IS NOT NULL "
+                   "AND status NOT IN ('failed','rejected') ORDER BY id", (campaign["id"], video_id))
+    recent = []
+    for e in eps[-6:]:
+        scenes = db.loads(e["script"], {}).get("scenes") or []
+        synopsis = " … ".join(sc["narration"] for sc in scenes[:1] + scenes[-2:])[:400]
+        recent.append((e["title"], synopsis))
+    return {"bible": cfg["series_bible"], "number": len(eps) + 1, "episodes": recent}
+
+
 def produce(video_id):
     video = db.one("SELECT * FROM videos WHERE id=?", (video_id,))
     campaign = db.one("SELECT * FROM campaigns WHERE id=?", (video["campaign_id"],)) if video else None
@@ -45,7 +59,8 @@ def produce(video_id):
         recent = [r["title"] for r in db.query(
             "SELECT title FROM videos WHERE campaign_id=? AND title!='' ORDER BY id DESC LIMIT 30", (campaign["id"],))]
         topic = video["topic"] or _next_topic(campaign, cfg)
-        sc = script.generate(s, _template(cfg), cfg["niche"], topic, int(cfg["scenes"]), int(cfg["duration"]), recent)
+        sc = script.generate(s, _template(cfg), cfg["niche"], topic, int(cfg["scenes"]), int(cfg["duration"]), recent,
+                             series=_series(campaign, cfg, video_id))
         tags = sc["hashtags"] + [t.lstrip("#") for t in cfg["extra_hashtags"].replace(",", " ").split() if t.strip("#")]
         db.execute("UPDATE videos SET title=?, description=?, hashtags=?, topic=?, script=?, updated_at=? WHERE id=?",
                    (sc["title"], sc["description"], json.dumps(list(dict.fromkeys(tags))), sc["topic"] or topic,

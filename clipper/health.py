@@ -38,9 +38,13 @@ def _playwright():
 def run():
     s = settings_mod.get_all()
     checks = [("Video engine", *_ffmpeg(s)), ("Script model", *_llm(s)), ("Image engine", *images.check(s)),
-              ("Voice", *tts.check(s)), ("Browser automation", *_playwright())]
-    accounts = {a["platform"]: a for a in db.query("SELECT * FROM accounts")}
-    return {
-        "checks": [{"name": n, "ok": ok, "detail": d} for n, ok, d in checks],
-        "accounts": accounts,
-    }
+              ("Voice", *tts.check(s)), ("Browser automation", *_playwright()), ("Accounts", *_accounts())]
+    return {"checks": [{"name": n, "ok": ok, "detail": d} for n, ok, d in checks]}
+
+
+def _accounts():
+    rows = db.query("SELECT status FROM accounts")
+    if not rows:
+        return False, "No accounts added yet"
+    ok = sum(r["status"] == "connected" for r in rows)
+    return ok == len(rows), f"{ok} of {len(rows)} connected"

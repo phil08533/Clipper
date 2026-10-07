@@ -31,7 +31,8 @@ DEFAULT_SETTINGS = {
     # Posting
     "browser_channel": "chrome",         # chrome | msedge | chromium
     "headless": False,
-    "max_posts_per_day": 12,             # safety cap across all campaigns and platforms
+    "max_posts_per_account": 6,          # safety cap: posts per account per day
+    "parallel_uploads": 2,               # accounts that may upload at the same time
     "delete_after_days": 14,             # delete video files this long after posting (0 = keep)
     "open_browser_on_start": True,
 }
@@ -48,8 +49,12 @@ DEFAULT_CAMPAIGN = {
     "caption_uppercase": True,
     "music_dir": "",
     "music_volume": 0.12,
-    "platforms": ["youtube", "tiktok", "instagram"],
-    "posts_per_day": 2,
+    "accounts": [],                      # account ids to post to
+    "schedule_mode": "random",           # random | even
+    "posts_per_day": 2,                  # even mode
+    "posts_min": 1,                      # random mode: posts per day varies between min and max
+    "posts_max": 3,
+    "min_gap_minutes": 120,              # random mode: minimum spacing between posts
     "window_start": 9,                   # local hour
     "window_end": 21,
     "days": [0, 1, 2, 3, 4, 5, 6],       # Monday = 0
@@ -59,6 +64,8 @@ DEFAULT_CAMPAIGN = {
     "youtube_visibility": "public",      # public | unlisted | private
     "ai_label": True,                    # tick each platform's AI-generated disclosure
     "extra_hashtags": "",
+    "series_bible": "",                  # non-empty = episodic series; previous episodes are fed back in
+    "preset": "",                        # which ready-made workflow this campaign started from
 }
 
 DEFAULT_PROMPTS = [

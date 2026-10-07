@@ -1,9 +1,11 @@
 """Autopilot: keeps each campaign's buffer of generated videos topped up and posts on schedule.
 
-Two worker threads (generation, posting) take jobs from queues so a slow render never
-blocks a scheduled post, and a tick thread decides what should happen next.
+One generation worker (the GPU does one video at a time), a pool of posting workers (different
+accounts upload in parallel; one account never runs two browsers), and a tick thread that decides
+what should happen next.
 """
 import datetime
+import json
 import queue
 import random
 import shutil
@@ -18,7 +20,7 @@ gen_q, post_q = queue.Queue(), queue.Queue()
 _queued_gen, _queued_post = set(), set()
 _qlock = threading.Lock()
 _notified = set()                # one-off log messages already shown
-state = {"generating": None, "posting": None, "last_tick": None}
+state = {"generating": None, "posting": [], "last_tick": None}
 
 
 # ---------- queues ----------
@@ -31,12 +33,19 @@ def enqueue_generation(video_id):
     gen_q.put(video_id)
 
 
-def enqueue_post(video_id, platforms=None, manual=False):
-    with _qlock:
-        if video_id in _queued_post:
-            return
-        _queued_post.add(video_id)
-    post_q.put((video_id, platforms, manual))
+def enqueue_post(video_id, account_ids=None, manual=False):
+    """Queues one job per account so a video goes to all its accounts in parallel."""
+    if account_ids is None:
+        video = db.one("SELECT campaign_id FROM videos WHERE id=?", (video_id,))
+        account_ids = publisher.campaign_for(video)["accounts"] if video else []
+    if not account_ids:
+        db.log("warn", "publisher", "No accounts selected for this campaign; nothing to post to", video_id)
+    for aid in account_ids:
+        with _qlock:
+            if (video_id, aid) in _queued_post:
+                continue
+            _queued_post.add((video_id, aid))
+        post_q.put((video_id, aid, manual))
 
 
 def new_video(campaign_id, topic=""):
@@ -52,6 +61,8 @@ def _gen_worker():
         state["generating"] = vid
         try:
             produce.produce(vid)
+        except Exception as e:  # noqa: BLE001
+            db.log("error", "generator", f"Unexpected generation error: {e}", vid)
         finally:
             state["generating"] = None
             with _qlock:
@@ -60,26 +71,29 @@ def _gen_worker():
 
 def _post_worker():
     while True:
-        vid, platforms, manual = post_q.get()
-        state["posting"] = vid
+        vid, aid, manual = post_q.get()
+        state["posting"].append(vid)
         try:
-            publisher.publish(vid, platforms, manual)
+            publisher.publish(vid, [aid], manual)
         except Exception as e:  # noqa: BLE001
             db.log("error", "publisher", f"Unexpected posting error: {e}", vid)
         finally:
-            state["posting"] = None
+            state["posting"].remove(vid)
             with _qlock:
-                _queued_post.discard(vid)
+                _queued_post.discard((vid, aid))
 
 
 # ---------- schedule maths ----------
 
-def next_slot(cfg, after):
-    """Next posting time after `after` (epoch secs): posts spread evenly across the daily window, with jitter."""
-    n = max(1, int(cfg["posts_per_day"]))
+def _window(cfg):
     start, end = int(cfg["window_start"]), int(cfg["window_end"])
-    if end <= start:
-        end = 24
+    return start, (24 if end <= start else end)
+
+
+def _even_slot(cfg, after):
+    """Posts spread evenly across the daily window, each nudged by a random offset."""
+    n = max(1, int(cfg["posts_per_day"]))
+    start, end = _window(cfg)
     days = set(cfg["days"]) or set(range(7))
     span = (end - start) * 3600
     jitter = max(0, int(cfg["jitter_minutes"])) * 60
@@ -90,12 +104,58 @@ def next_slot(cfg, after):
             continue
         base = datetime.datetime.combine(d, datetime.time(start)).timestamp()
         for i in range(n):
-            slot = base + span * (i + 0.5) / n
-            j = min(jitter, span / n / 2 - 60) if n > 1 else min(jitter, span / 2 - 60)
-            slot += random.uniform(-j, j) if j > 0 else 0
+            j = min(jitter, span / n / 2 - 60)
+            slot = base + span * (i + 0.5) / n + (random.uniform(-j, j) if j > 0 else 0)
             if slot > after + 60:
                 return slot
     return after + 86400
+
+
+def plan_day(cfg, day):
+    """Random times for one day: a random count between min and max, at random times, at least min_gap apart."""
+    start, end = _window(cfg)
+    span = (end - start) * 3600
+    lo = max(1, int(cfg["posts_min"]))
+    hi = max(lo, int(cfg["posts_max"]))
+    gap = max(0, int(cfg["min_gap_minutes"])) * 60
+    n = random.randint(lo, hi)
+    if gap:
+        n = min(n, int(span // gap) + 1)
+    free = max(0, span - (n - 1) * gap)
+    # Uniform points in the leftover time, then re-insert the gaps: random but never closer than `gap`.
+    offsets = sorted(random.uniform(0, free) for _ in range(n))
+    base = datetime.datetime.combine(day, datetime.time(start)).timestamp()
+    return [base + o + i * gap for i, o in enumerate(offsets)]
+
+
+def next_slot(cfg, after, plan=None):
+    """Returns (next post time, plan to store). Random mode keeps a per-day plan so the daily count holds."""
+    if cfg["schedule_mode"] != "random":
+        return _even_slot(cfg, after), None
+    plan = plan or {}
+    pending = [t for t in plan.get("times", []) if t > after + 60]
+    if pending:
+        return pending[0], {"day": plan["day"], "times": pending[1:]}
+    days = set(cfg["days"]) or set(range(7))
+    today = datetime.date.fromtimestamp(after)
+    first = 0
+    if plan.get("day"):
+        # Today's plan is used up: never draw a second plan for the same day.
+        first = max(0, (datetime.date.fromisoformat(plan["day"]) - today).days + 1)
+    for offset in range(first, first + 8):
+        d = today + datetime.timedelta(days=offset)
+        if d.weekday() not in days:
+            continue
+        times = [t for t in plan_day(cfg, d) if t > after + 60]
+        if times:
+            return times[0], {"day": d.isoformat(), "times": times[1:]}
+    return after + 86400, None
+
+
+def _advance(camp, cfg, now):
+    slot, plan = next_slot(cfg, now, db.loads(camp["schedule_plan"], None))
+    db.execute("UPDATE campaigns SET next_post_at=?, schedule_plan=? WHERE id=?",
+               (slot, json.dumps(plan) if plan else None, camp["id"]))
 
 
 # ---------- tick ----------
@@ -125,29 +185,27 @@ def tick():
 
         # 2. Post when a slot arrives.
         if camp["next_post_at"] is None:
-            nxt = next_slot(cfg, now)
-            db.execute("UPDATE campaigns SET next_post_at=? WHERE id=?", (nxt, cid))
+            _advance(camp, cfg, now)
             continue
         if now < camp["next_post_at"]:
             continue
+        if not cfg["accounts"]:
+            _once(f"noacct-{cid}", "warn", f"“{camp['name']}” has no accounts selected, so nothing will be posted.")
+            continue
         wanted = "('approved')" if cfg["review"] else "('ready','approved')"
-        video = db.one(f"SELECT id, title FROM videos WHERE campaign_id=? AND status IN {wanted} ORDER BY id LIMIT 1", (cid,))
+        video = db.one(f"SELECT id FROM videos WHERE campaign_id=? AND status IN {wanted} ORDER BY id LIMIT 1", (cid,))
         if not video:
             hint = "approve videos in the Library" if cfg["review"] else "waiting for generation"
             _once(f"empty-{cid}-{camp['next_post_at']}", "warn", f"“{camp['name']}”: a post is due but nothing is ready ({hint}).")
             continue
-        if publisher.posted_today() >= s["max_posts_per_day"]:
-            _once(f"cap-{datetime.date.today()}", "warn", f"Daily cap of {s['max_posts_per_day']} posts reached. Posting resumes tomorrow.")
-            continue
         enqueue_post(video["id"])
-        db.execute("UPDATE campaigns SET next_post_at=? WHERE id=?", (next_slot(cfg, now), cid))
+        _advance(camp, cfg, now)
 
-    # 3. Retry failed posts whose back-off has elapsed.
-    if publisher.posted_today() < s["max_posts_per_day"]:
-        for row in db.query("SELECT DISTINCT p.video_id FROM posts p JOIN videos v ON v.id=p.video_id "
-                            "WHERE v.status='retrying' AND p.status IN ('failed','pending') AND p.attempts<? "
-                            "AND (p.next_attempt_at IS NULL OR p.next_attempt_at<=?)", (publisher.MAX_ATTEMPTS, now)):
-            enqueue_post(row["video_id"])
+    # 3. Retry failed or held posts whose back-off has elapsed.
+    for row in db.query("SELECT p.video_id, p.account_id FROM posts p JOIN videos v ON v.id=p.video_id "
+                        "WHERE v.status='retrying' AND p.status IN ('failed','pending') AND p.attempts<? "
+                        "AND (p.next_attempt_at IS NULL OR p.next_attempt_at<=?)", (publisher.MAX_ATTEMPTS, now)):
+        enqueue_post(row["video_id"], [row["account_id"]])
 
 
 def housekeeping():
@@ -178,13 +236,14 @@ def recover():
     for v in db.query("SELECT id FROM videos WHERE status IN ('queued','generating')"):
         db.execute("UPDATE videos SET status='queued' WHERE id=?", (v["id"],))
         enqueue_generation(v["id"])
-    for p in db.query("SELECT video_id, platform FROM posts WHERE status='posting'"):
+    for p in db.query("SELECT video_id, account_id FROM posts WHERE status='posting'"):
         db.execute("UPDATE posts SET status='unconfirmed', error='App stopped while posting — check the account' "
-                   "WHERE video_id=? AND platform=?", (p["video_id"], p["platform"]))
+                   "WHERE video_id=? AND account_id=?", (p["video_id"], p["account_id"]))
         publisher.refresh_video_status(p["video_id"])
 
 
 def start():
     recover()
-    for target in (_gen_worker, _post_worker, _loop):
+    workers = max(1, int(settings_mod.get("parallel_uploads")))
+    for target in [_gen_worker, _loop] + [_post_worker] * workers:
         threading.Thread(target=target, daemon=True).start()

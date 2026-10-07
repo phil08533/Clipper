@@ -178,7 +178,8 @@ let renderToken = 0;
 const ROUTES = [
   [/^#\/overview$/, pageOverview],
   [/^#\/campaigns$/, pageCampaigns],
-  [/^#\/campaigns\/(new|\d+)$/, pageCampaignEdit],
+  [/^#\/campaigns\/new(?:\/(\w+))?$/, pageCampaignNew],
+  [/^#\/campaigns\/(\d+)$/, pageCampaignEdit],
   [/^#\/library$/, pageLibrary],
   [/^#\/prompts(?:\/(\d+|new))?$/, pagePrompts],
   [/^#\/accounts$/, pageAccounts],
@@ -257,7 +258,7 @@ async function pageOverview(root, token) {
 
   function fill(o) {
     kpis.replaceChildren(
-      kpi("Posted today", o.posted_today, `Safety cap ${o.daily_cap} per day`),
+      kpi("Posted today", o.posted_today, `Cap ${o.account_cap} per account per day`),
       kpi("Posted, last 7 days", o.stats.posted_7d, "Across all platforms"),
       kpi("Ready to post", o.stats.ready, "Generated and waiting"),
       kpi("Awaiting your review", o.stats.review, o.stats.review ? h("a", { href: "#/library" }, "Review now") : "Nothing to review"));
@@ -265,12 +266,13 @@ async function pageOverview(root, token) {
     const camps = o.campaigns.filter((c) => c.enabled);
     upNext.replaceChildren(camps.length
       ? h("table", { class: "table" },
-          h("thead", {}, h("tr", {}, h("th", {}, "Campaign"), h("th", {}, "Platforms"), h("th", {}, "Next post"))),
+          h("thead", {}, h("tr", {}, h("th", {}, "Campaign"), h("th", {}, "Posts to"), h("th", {}, "Next post"))),
           h("tbody", {}, camps.map((c) => h("tr", { class: "clickable", onclick: () => (location.hash = `#/campaigns/${c.id}`) },
             h("td", { class: "title-cell" }, c.name),
-            h("td", { class: "muted" }, c.platforms.map((p) => PLATFORM_NAMES[p]).join(", ")),
+            h("td", {}, accountChips(c.accounts)),
             h("td", {}, o.autopilot ? (c.next_post_at ? h("span", {}, when(c.next_post_at), h("span", { class: "muted small" }, "  ·  ", rel(c.next_post_at))) : "Scheduling…") : h("span", { class: "muted" }, "Autopilot paused"))))))
-      : emptyState("No active campaigns", "A campaign defines what to make and when to post it.", h("a", { class: "btn", href: "#/campaigns/new" }, "Create a campaign")));
+      : emptyState("No active campaigns", o.accounts ? "A campaign defines what to make, where to post it and when." : "Start by adding your accounts, then pick a ready-made workflow.",
+          h("a", { class: "btn", href: o.accounts ? "#/campaigns/new" : "#/accounts" }, o.accounts ? "Create a campaign" : "Add accounts")));
 
     recent.replaceChildren(o.recent.length
       ? h("div", {}, o.recent.map((v) => h("div", { class: "list-item clickable", style: "cursor:pointer", onclick: () => openVideo(v.id) },
@@ -287,7 +289,7 @@ async function pageOverview(root, token) {
       h("div", { class: "list-item" }, h("span", { class: "grow" }, "Generating"),
         w.generating ? h("a", { href: "#", onclick: (e) => { e.preventDefault(); openVideo(w.generating); } }, `Video #${w.generating}`) : h("span", { class: "muted" }, "Idle")),
       h("div", { class: "list-item" }, h("span", { class: "grow" }, "Posting"),
-        w.posting ? h("a", { href: "#", onclick: (e) => { e.preventDefault(); openVideo(w.posting); } }, `Video #${w.posting}`) : h("span", { class: "muted" }, "Idle")),
+        w.posting.length ? h("span", {}, [...new Set(w.posting)].map((id, i) => [i ? ", " : "", h("a", { href: "#", onclick: (e) => { e.preventDefault(); openVideo(id); } }, `Video #${id}`)])) : h("span", { class: "muted" }, "Idle")),
       h("div", { class: "list-item" }, h("span", { class: "grow" }, "Scheduler"),
         h("span", { class: "muted" }, w.last_tick ? `Checked ${rel(w.last_tick)}` : "Starting"))));
 
@@ -326,6 +328,20 @@ function logLine(l) {
    Campaigns
    ============================================================ */
 
+function accountChips(accounts) {
+  if (!accounts.length) return h("span", { class: "muted" }, "No accounts");
+  return h("span", { class: "acct-list" }, accounts.map((a) =>
+    h("span", { class: "acct-chip", title: `${PLATFORM_NAMES[a.platform]} · ${(ACCOUNT_STATUS[a.status] || [a.status])[0]}` },
+      h("span", { class: "mono-badge " + a.platform }, PLATFORM_MONO[a.platform]), a.label)));
+}
+
+function scheduleText(cfg) {
+  const win = `${hourLabel(cfg.window_start)}–${hourLabel(cfg.window_end % 24)}`;
+  return cfg.schedule_mode === "random"
+    ? `${cfg.posts_min === cfg.posts_max ? cfg.posts_min : `${cfg.posts_min}–${cfg.posts_max}`}/day, random · ${win}`
+    : `${cfg.posts_per_day}/day, evenly spaced · ${win}`;
+}
+
 async function pageCampaigns(root, token) {
   const list = await GET("/api/campaigns");
   if (isStale(token)) return;
@@ -334,7 +350,7 @@ async function pageCampaigns(root, token) {
 
   function fill(list) {
     tableWrap.replaceChildren(list.length ? h("table", { class: "table" },
-      h("thead", {}, h("tr", {}, h("th", { style: "width:56px" }, "Active"), h("th", {}, "Campaign"), h("th", {}, "Platforms"),
+      h("thead", {}, h("tr", {}, h("th", { style: "width:56px" }, "Active"), h("th", {}, "Campaign"), h("th", {}, "Posts to"),
         h("th", {}, "Schedule"), h("th", {}, "Next post"), h("th", { class: "num" }, "Ready"), h("th", { class: "num" }, "Posted"), h("th", {}))),
       h("tbody", {}, list.map((c) => {
         const cfg = c.config, n = c.counts;
@@ -343,8 +359,8 @@ async function pageCampaigns(root, token) {
             await attempt(() => api("PUT", `/api/campaigns/${c.id}`, { enabled: e.target.checked }), e.target.checked ? "Campaign activated" : "Campaign paused");
           } }), h("span"))),
           h("td", {}, h("div", { class: "title-cell" }, c.name), h("div", { class: "muted small" }, cfg.niche || "No niche set")),
-          h("td", { class: "muted" }, cfg.platforms.map((p) => PLATFORM_NAMES[p]).join(", ") || "None"),
-          h("td", { class: "muted" }, `${cfg.posts_per_day}/day · ${hourLabel(cfg.window_start)}–${hourLabel(cfg.window_end % 24)}`),
+          h("td", {}, accountChips(c.accounts)),
+          h("td", { class: "muted small" }, scheduleText(cfg)),
           h("td", {}, c.enabled && c.next_post_at ? when(c.next_post_at) : h("span", { class: "muted" }, "—")),
           h("td", { class: "num" }, (n.ready || 0) + (n.approved || 0) + (n.needs_review ? ` (+${n.needs_review} review)` : "")),
           h("td", { class: "num" }, (n.posted || 0) + (n.partial || 0)),
@@ -352,11 +368,36 @@ async function pageCampaigns(root, token) {
             await attempt(() => api("POST", `/api/campaigns/${c.id}/generate`, {}), "Video queued for generation");
           } }, "Generate now")));
       })))
-      : emptyState("No campaigns yet", "Create one to tell Clipper what to make, where to post it and how often.", h("a", { class: "btn primary", href: "#/campaigns/new" }, "Create your first campaign")));
+      : emptyState("No campaigns yet", "Pick a ready-made workflow or build your own. Each campaign can post to several accounts.",
+          h("a", { class: "btn primary", href: "#/campaigns/new" }, "Create your first campaign")));
   }
-  root.replaceChildren(pageHead("Campaigns", "Each campaign is a content series with its own prompt, look and posting schedule.", [newBtn]), card(null, tableWrap));
+  root.replaceChildren(pageHead("Campaigns", "Each campaign is a content series with its own prompt, look, accounts and schedule. Run as many as you like at once.", [newBtn]), card(null, tableWrap));
   fill(list);
   return { refresh: async () => { if (!document.activeElement || document.activeElement === document.body) { try { fill(await GET("/api/campaigns")); } catch {} } } };
+}
+
+/* ---------- new campaign: pick a workflow ---------- */
+
+async function pageCampaignNew(root, presetKey, token) {
+  if (presetKey) return pageCampaignEdit(root, "new", token, presetKey);
+  const presets = await GET("/api/presets");
+  if (isStale(token)) return;
+  const cards = presets.map((p) => h("a", { class: "preset", href: `#/campaigns/new/${p.key}` },
+    h("div", { class: "preset-name" }, p.name),
+    h("div", { class: "preset-tag" }, p.tagline),
+    h("dl", { class: "kv preset-kv" },
+      h("dt", {}, "Length"), h("dd", {}, `${p.config.duration}s · ${p.config.scenes} scenes`),
+      h("dt", {}, "Schedule"), h("dd", {}, scheduleText(p.config)),
+      h("dt", {}, p.config.series_bible ? "Format" : "Topics"),
+      h("dd", {}, p.config.series_bible ? "Ongoing episodes" : p.config.topics.length ? `${p.config.topics.length} ready to go` : "Model picks")),
+    h("span", { class: "preset-cta" }, "Use this workflow ", icon("back"))));
+  root.replaceChildren(
+    pageHead("New campaign", "Start from a ready-made workflow — every setting is filled in. You only choose which accounts it posts to.", null, ["#/campaigns", "Campaigns"]),
+    h("div", { class: "preset-grid" }, cards,
+      h("a", { class: "preset blank", href: "#/campaigns/new/blank" },
+        h("div", { class: "preset-name" }, "Start from scratch"),
+        h("div", { class: "preset-tag" }, "Your own niche, prompt and look. Every option is editable."),
+        h("span", { class: "preset-cta" }, "Build your own ", icon("back")))));
 }
 
 /* ---------- form helpers ---------- */
@@ -384,28 +425,61 @@ function withSuffix(control, suffix) { return h("div", { class: "input-group" },
 const HOURS = Array.from({ length: 25 }, (_, i) => [i, i === 24 ? "Midnight (end of day)" : hourLabel(i)]);
 const DAYS = [[0, "Mon"], [1, "Tue"], [2, "Wed"], [3, "Thu"], [4, "Fri"], [5, "Sat"], [6, "Sun"]];
 
-async function pageCampaignEdit(root, idParam, token) {
+/* ---------- campaign form ---------- */
+
+async function pageCampaignEdit(root, idParam, token, presetKey) {
   const isNew = idParam === "new";
-  const [prompts, defaults, camp] = await Promise.all([
-    GET("/api/prompts"), GET("/api/campaigns/defaults"), isNew ? null : GET(`/api/campaigns/${idParam}`).catch(() => null)]);
+  const [prompts, defaults, accounts, camp, preset] = await Promise.all([
+    GET("/api/prompts"), GET("/api/campaigns/defaults"), GET("/api/accounts"),
+    isNew ? null : GET(`/api/campaigns/${idParam}`).catch(() => null),
+    isNew && presetKey && presetKey !== "blank" ? api("POST", `/api/presets/${presetKey}/apply`).catch(() => null) : null]);
   if (isStale(token)) return;
   if (!isNew && !camp) { root.replaceChildren(emptyState("Campaign not found", "", h("a", { class: "btn", href: "#/campaigns" }, "Back"))); return; }
-  const cfg = camp ? camp.config : { ...defaults, prompt_id: prompts[0] && prompts[0].id };
+  // A preset may have just created its prompt, so re-read prompts.
+  const promptList = preset ? await GET("/api/prompts") : prompts;
+  if (isStale(token)) return;
+  const cfg = camp ? camp.config : preset ? preset.config : { ...defaults, prompt_id: promptList[0] && promptList[0].id };
+  const showWhen = (name, values) => ({ dataset: { showName: name, showValues: values.join(",") } });
+
+  const byPlatform = Object.keys(PLATFORM_NAMES).map((p) => [p, accounts.filter((a) => a.platform === p)]).filter(([, l]) => l.length);
+  const accountPicker = accounts.length
+    ? h("div", { class: "acct-pick" }, byPlatform.map(([p, list]) => h("div", { class: "acct-group" },
+        h("div", { class: "acct-group-title" }, PLATFORM_NAMES[p]),
+        list.map((a) => h("label", { class: "check acct-option" },
+          h("input", { type: "checkbox", name: "accounts", value: String(a.id), checked: cfg.accounts.includes(a.id) }),
+          h("span", { class: "grow" }, h("div", { class: "t" }, a.label), a.campaigns.length ? h("div", { class: "d" }, "Also used by ", a.campaigns.filter((n) => !camp || n !== camp.name).join(", ") || "this campaign") : null),
+          pill(ACCOUNT_STATUS, a.status))))),
+        h("a", { class: "btn sm", href: "#/accounts", style: "align-self:flex-start" }, icon("plus"), "Add another account"))
+    : h("div", { class: "note-box" }, "You haven't added any accounts yet. ", h("a", { href: "#/accounts" }, "Add accounts"), " first — you can save this campaign now and choose accounts later.");
+
+  const modeSeg = h("div", { class: "seg", role: "radiogroup" }, [["random", "Random times"], ["even", "Evenly spaced"]].map(([v, l]) =>
+    h("label", { class: "seg-opt" }, h("input", { type: "radio", name: "schedule_mode", value: v, checked: cfg.schedule_mode === v }), h("span", {}, l))));
+
+  const upcoming = camp && camp.enabled && camp.upcoming.length
+    ? h("div", { class: "note-box" }, h("strong", {}, "Coming up: "), camp.upcoming.slice(0, 6).map(when).join("  ·  "),
+        cfg.schedule_mode === "random" ? h("div", { class: "muted small", style: "margin-top:4px" }, "Random times are drawn one day at a time, so only the current day's plan is shown.") : null)
+    : null;
 
   const form = h("form", { onsubmit: (e) => e.preventDefault() },
-    section("Basics", "Name the series and describe what the channel is about. The niche steers every script.",
-      field("Campaign name", input("name", camp ? camp.name : "", { placeholder: "e.g. Space facts", required: true })),
+    section("Basics", "Name the series and describe what it's about. The niche steers every script.",
+      field("Campaign name", input("name", camp ? camp.name : preset ? preset.name : "", { placeholder: "e.g. Myths at Midnight", required: true })),
       field("Niche", input("niche", cfg.niche, { placeholder: "e.g. astronomy and space exploration" }), "One phrase describing the audience and subject."),
-      checkbox("enabled", camp ? camp.enabled : false, "Active", "When autopilot is running, active campaigns generate and post on schedule.")),
+      checkbox("enabled", camp ? camp.enabled : isNew, "Active", "When autopilot is running, active campaigns generate and post on schedule.")),
+
+    section("Accounts", "Where this campaign posts. Pick any mix of accounts across platforms; each account can belong to several campaigns.",
+      accountPicker),
 
     section("Content", "Which prompt to use and what to talk about.",
       h("div", { class: "field" },
         h("label", { for: "f-prompt" }, "Prompt"),
         h("div", { class: "input-group" },
-          h("select", { class: "input", name: "prompt_id", id: "f-prompt" }, prompts.map((p) => h("option", { value: String(p.id), selected: p.id === cfg.prompt_id }, p.name))),
+          h("select", { class: "input", name: "prompt_id", id: "f-prompt" }, promptList.map((p) => h("option", { value: String(p.id), selected: p.id === cfg.prompt_id }, p.name))),
           h("a", { class: "btn", href: "#/prompts" }, "Edit prompts"))),
-      field("Topics", h("textarea", { class: "input", name: "topics", rows: 5, placeholder: "One topic per line — used in order, then repeated.\nLeave empty to let the model pick fresh topics within the niche." , value: cfg.topics.join("\n") }),
-        "Optional. Recent titles are always passed to the model to avoid repeats."),
+      field("Topics", h("textarea", { class: "input", name: "topics", rows: 6, placeholder: "One topic per line — used in order, then repeated.\nLeave empty to let the model pick fresh topics within the niche.", value: cfg.topics.join("\n") }),
+        cfg.topics.length ? `${cfg.topics.length} topics. Recent titles are always passed to the model to avoid repeats.` : "Optional. Recent titles are always passed to the model to avoid repeats."),
+      field("Story world", h("textarea", { class: "input", name: "series_bible", rows: cfg.series_bible ? 8 : 3, value: cfg.series_bible,
+        placeholder: "Optional. Describe a setting, characters and a central mystery to turn this campaign into an ongoing series — each video becomes the next episode." }),
+        "When filled in, previous episodes are sent to the model so the story continues."),
       h("div", { class: "field-row" },
         field("Target length", withSuffix(input("duration", cfg.duration, { type: "number", min: 10, max: 170, class: "input narrow" }), "seconds")),
         field("Scenes", withSuffix(input("scenes", cfg.scenes, { type: "number", min: 2, max: 12, class: "input narrow" }), "images per video"))),
@@ -420,16 +494,23 @@ async function pageCampaignEdit(root, idParam, token) {
       field("Music folder", input("music_dir", cfg.music_dir, { placeholder: "C:\\Users\\you\\Music\\Clipper" }), "Optional. A random track from this folder plays under the voice. Use music you have rights to."),
       field("Music volume", withSuffix(input("music_volume", Math.round(cfg.music_volume * 100), { type: "number", min: 0, max: 100, class: "input narrow" }), "%"))),
 
-    section("Publishing", "Where and when to post. Times are spread evenly through the window with a small random offset.",
-      h("div", { class: "field" }, h("div", { class: "label" }, "Platforms"), chips("platforms", cfg.platforms, Object.entries(PLATFORM_NAMES))),
-      h("div", { class: "field-row" },
-        field("Posts per day", withSuffix(input("posts_per_day", cfg.posts_per_day, { type: "number", min: 1, max: 12, class: "input narrow" }), "per platform")),
+    section("Schedule", "When to post. Random times look more natural; evenly spaced is more predictable. Each post goes to every selected account.",
+      h("div", { class: "field" }, h("div", { class: "label" }, "Timing"), modeSeg),
+      h("div", Object.assign({ class: "field-row" }, showWhen("schedule_mode", ["random"])),
+        field("Posts per day", h("div", { class: "input-group" },
+          input("posts_min", cfg.posts_min, { type: "number", min: 1, max: 12, class: "input narrow", "aria-label": "Minimum posts per day" }),
+          h("span", { class: "suffix" }, "to"),
+          input("posts_max", cfg.posts_max, { type: "number", min: 1, max: 12, class: "input narrow", "aria-label": "Maximum posts per day" })), "A new random count is picked each day."),
+        field("Minimum gap", withSuffix(input("min_gap_minutes", cfg.min_gap_minutes, { type: "number", min: 0, max: 720, class: "input narrow" }), "minutes between posts"))),
+      h("div", Object.assign({ class: "field-row" }, showWhen("schedule_mode", ["even"])),
+        field("Posts per day", withSuffix(input("posts_per_day", cfg.posts_per_day, { type: "number", min: 1, max: 12, class: "input narrow" }), "per day")),
         field("Random offset", withSuffix(input("jitter_minutes", cfg.jitter_minutes, { type: "number", min: 0, max: 120, class: "input narrow" }), "± minutes"))),
       h("div", { class: "field-row" },
         field("Window opens", select("window_start", cfg.window_start, HOURS.slice(0, 24))),
         field("Window closes", select("window_end", cfg.window_end, HOURS.slice(1)))),
       h("div", { class: "field" }, h("div", { class: "label" }, "Days"), chips("days", cfg.days, DAYS)),
-      field("YouTube visibility", select("youtube_visibility", cfg.youtube_visibility, [["public", "Public"], ["unlisted", "Unlisted"], ["private", "Private"]]))),
+      field("YouTube visibility", select("youtube_visibility", cfg.youtube_visibility, [["public", "Public"], ["unlisted", "Unlisted"], ["private", "Private"]])),
+      upcoming),
 
     section("Automation", "How much Clipper does without you.",
       checkbox("review", cfg.review, "Hold videos for my approval", "Generated videos wait in the Library until you approve them. Turn off for fully hands-off posting."),
@@ -442,8 +523,16 @@ async function pageCampaignEdit(root, idParam, token) {
         if (await attempt(() => api("DELETE", `/api/campaigns/${camp.id}`), "Campaign deleted")) location.hash = "#/campaigns";
       } }, "Delete") : null,
       h("span", { class: "grow" }),
-      h("a", { class: "btn", href: "#/campaigns" }, "Cancel"),
+      h("a", { class: "btn", href: isNew ? "#/campaigns/new" : "#/campaigns" }, isNew ? "Back" : "Cancel"),
       h("button", { class: "btn primary", type: "submit", onclick: save }, isNew ? "Create campaign" : "Save changes")));
+
+  function syncVisibility() {
+    form.querySelectorAll("[data-show-name]").forEach((el) => {
+      const val = (form.querySelector(`[name="${el.dataset.showName}"]:checked`) || {}).value;
+      el.hidden = !el.dataset.showValues.split(",").includes(val);
+    });
+  }
+  form.addEventListener("change", syncVisibility);
 
   async function save() {
     const fd = new FormData(form);
@@ -454,16 +543,20 @@ async function pageCampaignEdit(root, idParam, token) {
       name,
       enabled: form.elements.enabled.checked,
       config: {
+        ...cfg,
         niche: fd.get("niche").trim(),
+        accounts: fd.getAll("accounts").map(Number),
         prompt_id: Number(fd.get("prompt_id")) || null,
         topics: fd.get("topics").split("\n").map((t) => t.trim()).filter(Boolean),
+        series_bible: fd.get("series_bible").trim(),
         duration: num("duration"), scenes: num("scenes"),
         extra_hashtags: fd.get("extra_hashtags"),
         visual_style: fd.get("visual_style"),
         caption_words: num("caption_words"), caption_position: fd.get("caption_position"),
         caption_uppercase: form.elements.caption_uppercase.checked,
         music_dir: fd.get("music_dir").trim(), music_volume: num("music_volume") / 100,
-        platforms: fd.getAll("platforms"),
+        schedule_mode: fd.get("schedule_mode"),
+        posts_min: num("posts_min"), posts_max: num("posts_max"), min_gap_minutes: num("min_gap_minutes"),
         posts_per_day: num("posts_per_day"), jitter_minutes: num("jitter_minutes"),
         window_start: num("window_start"), window_end: num("window_end"),
         days: fd.getAll("days").map(Number),
@@ -471,17 +564,24 @@ async function pageCampaignEdit(root, idParam, token) {
         review: form.elements.review.checked, buffer: num("buffer"), ai_label: form.elements.ai_label.checked,
       },
     };
-    if (body.config.window_end <= body.config.window_start) { toast("The posting window must close after it opens", "error"); return; }
-    if (!body.config.platforms.length) { toast("Pick at least one platform", "error"); return; }
+    const c = body.config;
+    if (c.window_end <= c.window_start) { toast("The posting window must close after it opens", "error"); return; }
+    if (c.schedule_mode === "random" && c.posts_max < c.posts_min) { toast("Maximum posts per day must be at least the minimum", "error"); return; }
+    if (!c.days.length) { toast("Pick at least one posting day", "error"); return; }
+    if (!c.accounts.length && body.enabled && !confirm("No accounts are selected, so this campaign will make videos but not post them. Save anyway?")) return;
     const saved = await attempt(() => isNew ? api("POST", "/api/campaigns", body) : api("PUT", `/api/campaigns/${camp.id}`, body), isNew ? "Campaign created" : "Changes saved");
     if (saved && isNew) location.hash = `#/campaigns/${saved.id}`;
+    else if (saved) route();
   }
 
   const actions = camp ? [h("button", { class: "btn", type: "button", onclick: async () => {
     await attempt(() => api("POST", `/api/campaigns/${camp.id}/generate`, {}), "Video queued — watch progress in the Library");
   } }, icon("bolt"), "Generate a video now")] : null;
+  const sub = preset ? `Ready-made workflow: ${preset.name}. Everything is filled in — pick your accounts and create it.`
+    : isNew ? "Set up a content series. You can change everything later." : null;
 
-  root.replaceChildren(pageHead(isNew ? "New campaign" : camp.name, isNew ? "Set up a content series. You can change everything later." : null, actions, ["#/campaigns", "Campaigns"]), form);
+  root.replaceChildren(pageHead(isNew ? (preset ? preset.name : "New campaign") : camp.name, sub, actions, isNew ? ["#/campaigns/new", "Workflows"] : ["#/campaigns", "Campaigns"]), form);
+  syncVisibility();
 }
 
 /* ============================================================
@@ -589,7 +689,8 @@ function renderVideo(v, reload) {
       v.status === "needs_review" ? h("button", { class: "btn primary", onclick: act("approve", null, "Approved — it will post at the next slot") }, icon("check"), "Approve") : null,
       v.status === "needs_review" ? h("button", { class: "btn", onclick: act("reject", null, "Rejected") }, "Reject") : null,
       v.video_url && !["posting", "posted"].includes(v.status) ? h("button", { class: v.status === "needs_review" ? "btn" : "btn primary", onclick: () => {
-        if (confirm(`Post this video now to ${v.platforms.map((p) => PLATFORM_NAMES[p]).join(", ")}?`)) act("post", null, "Posting started")();
+        if (!v.targets.length) { toast("This campaign has no accounts selected", "error"); return; }
+        if (confirm(`Post this video now to ${v.targets.map((a) => `${a.label} (${PLATFORM_NAMES[a.platform]})`).join(", ")}?`)) act("post", null, "Posting started")();
       } }, icon("upload"), "Post now") : null,
       v.video_url ? h("a", { class: "btn", href: v.video_url, download: `clipper-${v.id}.mp4` }, icon("download"), "Download") : null,
       !working ? h("button", { class: "btn", onclick: () => { if (confirm("Throw this version away and generate a new one?")) act("regenerate", null, "Regenerating")(); } }, icon("refresh"), "Regenerate") : null,
@@ -602,20 +703,20 @@ function renderVideo(v, reload) {
   const fDesc = h("textarea", { class: "input", rows: 3, value: v.description });
   const fTags = h("input", { class: "input", value: v.hashtags.map((t) => "#" + t).join(" ") });
 
-  const postRows = v.platforms.map((p) => {
-    const post = v.posts.find((x) => x.platform === p);
+  const postRows = v.targets.length ? v.targets.map((a) => {
+    const post = v.posts.find((x) => x.account_id === a.id);
     const st = post ? post.status : "pending";
     return h("tr", {},
-      h("td", { class: "title-cell" }, PLATFORM_NAMES[p]),
+      h("td", { class: "title-cell" }, h("span", { class: "mono-badge " + a.platform, style: "margin-right:8px" }, PLATFORM_MONO[a.platform]), a.label),
       h("td", {}, post ? pill(POST_STATUS, st) : h("span", { class: "pill" }, "Not posted"), post && post.attempts ? h("span", { class: "muted small" }, `  ${post.attempts} attempt${post.attempts > 1 ? "s" : ""}`) : null),
       h("td", { class: "small" }, post && post.url ? h("a", { href: post.url, target: "_blank", rel: "noopener" }, "Open ", icon("external"))
         : post && post.error ? h("span", { class: st === "unconfirmed" ? "muted" : "", style: st === "failed" ? "color:var(--red)" : "" }, post.error) : h("span", { class: "muted" }, "—")),
       h("td", { class: "num" },
-        st === "unconfirmed" ? h("button", { class: "btn sm", onclick: act("mark_posted", { platform: p }, "Marked as posted") }, "It posted") : null,
+        st === "unconfirmed" ? h("button", { class: "btn sm", onclick: act("mark_posted", { account_id: a.id }, "Marked as posted") }, "It posted") : null,
         v.video_url && ["failed", "unconfirmed", "pending"].includes(st) && post ? h("button", { class: "btn sm", style: "margin-left:6px", onclick: () => {
-          if (st !== "unconfirmed" || confirm("Retrying may create a duplicate if the first attempt actually went through. Retry?")) act("post", { platforms: [p] }, "Retry started")();
+          if (st !== "unconfirmed" || confirm("Retrying may create a duplicate if the first attempt actually went through. Retry?")) act("post", { accounts: [a.id] }, "Retry started")();
         } }, "Retry") : null));
-  });
+  }) : [h("tr", {}, h("td", { class: "muted" }, "This campaign has no accounts selected."))];
 
   const right = h("div", {},
     v.status === "failed" && v.error ? h("div", { class: "error-box", style: "margin-bottom:16px" }, v.error) : null,
@@ -625,7 +726,7 @@ function renderVideo(v, reload) {
         const r = await attempt(() => api("PUT", `/api/videos/${v.id}`, { title: fTitle.value, description: fDesc.value, hashtags: fTags.value }), "Saved");
         if (r) { document.activeElement.blur(); reload(true); }
       } }, "Save text"), h("span", { class: "muted small" }, "Edits apply to posts that haven't gone out yet."))),
-    h("div", { class: "section-title" }, "Platforms"),
+    h("div", { class: "section-title" }, "Accounts"),
     h("div", { class: "card" }, h("table", { class: "table" }, h("tbody", {}, postRows))),
     h("div", { class: "section-title" }, "Details"),
     h("dl", { class: "kv" },
@@ -719,32 +820,55 @@ async function pagePrompts(root, pid, token) {
    ============================================================ */
 
 async function pageAccounts(root, token) {
-  const wrap = h("div", { class: "grid-3" });
+  const wrap = h("div", { class: "stack" });
+  const addPlatform = h("select", { class: "input", style: "width:auto", "aria-label": "Platform" },
+    Object.entries(PLATFORM_NAMES).map(([k, n]) => h("option", { value: k }, n)));
+  const addLabel = h("input", { class: "input", placeholder: "Name, e.g. Mythology channel", "aria-label": "Account name", style: "max-width:280px" });
+  const addForm = h("form", { class: "row", style: "flex-wrap:wrap", onsubmit: async (e) => {
+    e.preventDefault();
+    const r = await attempt(() => api("POST", "/api/accounts", { platform: addPlatform.value, label: addLabel.value }), "Account added — click Connect to sign in");
+    if (r) { addLabel.value = ""; load(); }
+  } }, addPlatform, addLabel, h("button", { class: "btn primary", type: "submit" }, icon("plus"), "Add account"));
+
   async function load() {
     let accts;
     try { accts = await GET("/api/accounts"); } catch { return; }
     if (isStale(token)) return;
-    wrap.replaceChildren(...accts.map((a) => {
-      const busy = ["checking", "login_open"].includes(a.status);
-      const run = (action, msg) => async () => { await attempt(() => api("POST", `/api/accounts/${a.platform}/${action}`), msg); setTimeout(load, 600); };
-      return h("section", { class: "card acct" },
-        h("div", { class: "card-body stack", style: "gap:12px" },
-          h("div", { class: "row" }, h("div", { class: "acct-logo" }, PLATFORM_MONO[a.platform]),
-            h("div", { class: "grow" }, h("div", { style: "font-weight:600" }, a.name), h("div", { class: "muted small" }, `${a.posted} posted`)),
-            pill(ACCOUNT_STATUS, a.status)),
-          h("div", { class: "muted small" }, a.note || (a.checked_at ? `Checked ${rel(a.checked_at)}` : "Not checked yet"))),
-        h("div", { class: "card-foot" },
-          a.status === "connected" ? h("button", { class: "btn danger sm", disabled: busy, onclick: () => { if (confirm(`Sign out of ${a.name}? This deletes the saved browser session.`)) run("disconnect", "Signed out")(); } }, "Sign out") : null,
-          h("span", { class: "grow" }),
-          h("button", { class: "btn sm", disabled: busy, onclick: run("check", "Checking sign-in…") }, "Check"),
-          h("button", { class: "btn primary sm", disabled: busy, onclick: run("connect", "A browser window is opening — sign in, then close it") }, a.status === "connected" ? "Reconnect" : "Connect")));
-    }));
+    const groups = Object.keys(PLATFORM_NAMES).map((p) => [p, accts.filter((a) => a.platform === p)]);
+    wrap.replaceChildren(...(accts.length ? groups.filter(([, l]) => l.length).map(([p, list]) => card(`${PLATFORM_NAMES[p]} · ${list.length}`,
+      h("div", {}, list.map((a) => {
+        const busy = ["checking", "login_open"].includes(a.status);
+        const run = (action, msg) => async () => { await attempt(() => api("POST", `/api/accounts/${a.id}/${action}`), msg); setTimeout(load, 600); };
+        return h("div", { class: "list-item acct-row" },
+          h("div", { class: "acct-logo" }, PLATFORM_MONO[a.platform]),
+          h("div", { class: "grow", style: "min-width:0" },
+            h("div", { class: "row" }, h("span", { style: "font-weight:600" }, a.label),
+              h("button", { class: "btn ghost sm", "aria-label": "Rename", onclick: async () => {
+                const label = prompt("Rename account", a.label);
+                if (label && label.trim()) { await attempt(() => api("PUT", `/api/accounts/${a.id}`, { label }), "Renamed"); load(); }
+              } }, "Rename")),
+            h("div", { class: "muted small" },
+              `${a.posted} posted · ${a.posted_today} today`,
+              a.campaigns.length ? ` · used by ${a.campaigns.join(", ")}` : " · not used by any campaign"),
+            a.note ? h("div", { class: "muted small" }, a.note) : null),
+          pill(ACCOUNT_STATUS, a.status),
+          h("div", { class: "row" },
+            h("button", { class: "btn sm", disabled: busy, onclick: run("check", "Checking sign-in…") }, "Check"),
+            h("button", { class: "btn primary sm", disabled: busy, onclick: run("connect", "A browser window is opening — sign in, then close it") }, a.status === "connected" ? "Reconnect" : "Connect"),
+            h("button", { class: "btn ghost sm danger", disabled: busy, onclick: async () => {
+              if (!confirm(`Remove “${a.label}”? Its saved sign-in is deleted and it's removed from campaigns. Post history is kept.`)) return;
+              await attempt(() => api("DELETE", `/api/accounts/${a.id}`), "Account removed"); load();
+            } }, "Remove")));
+      }))))
+      : [card(null, emptyState("No accounts yet", "Add one above for each channel you want to post to. You can add several per platform."))]));
   }
   root.replaceChildren(
-    pageHead("Accounts", "Clipper posts through a browser profile you sign in to once."),
-    h("div", { class: "note-box", style: "margin-bottom:16px" },
-      "Connect opens a normal browser window. Sign in the way you usually do (including two-step verification), then close the window. ",
-      "The session is saved in data/browser_profiles on this PC — your password is never stored by Clipper. Use accounts you own, and keep each platform's rules on automation and AI content in mind."),
+    pageHead("Accounts", "Add as many accounts as you like — several per platform is fine. Each one keeps its own sign-in."),
+    card(null, h("div", { class: "card-body" }, addForm)),
+    h("div", { class: "note-box", style: "margin:16px 0" },
+      "Connect opens a normal browser window for that account only. Sign in as you usually do (including two-step verification), then close the window. ",
+      "Each account's session lives in its own folder under data/browser_profiles — Clipper never stores passwords. ",
+      "For YouTube, if one Google login owns several channels, switch to the right channel before closing the window; each account remembers its channel."),
     wrap);
   await load();
   return { refresh: load };
@@ -824,7 +948,10 @@ async function pageSettings(root, token) {
     section("Posting", "How the browser behaves and how much Clipper may post.",
       field("Browser", select("browser_channel", s.browser_channel, [["chrome", "Google Chrome"], ["msedge", "Microsoft Edge"], ["chromium", "Built-in Chromium"]]), "Chrome or Edge is most reliable for signing in."),
       checkbox("headless", s.headless, "Post in the background", "Hide the browser window while posting. Some platforms behave differently when hidden — leave off if posts fail."),
-      field("Daily safety cap", withSuffix(input("max_posts_per_day", s.max_posts_per_day, { type: "number", min: 1, max: 100, class: "input narrow" }), "posts per day, all platforms")),
+      field("Daily safety cap", withSuffix(input("max_posts_per_account", s.max_posts_per_account, { type: "number", min: 1, max: 50, class: "input narrow" }), "posts per account per day"),
+        "Extra posts wait until the next day. Keeps any one account from looking like a bot."),
+      field("Parallel uploads", withSuffix(input("parallel_uploads", s.parallel_uploads, { type: "number", min: 1, max: 8, class: "input narrow" }), "accounts at once"),
+        "How many accounts may upload at the same time. Each opens its own browser. Takes effect after restarting Clipper."),
       field("Clean up", withSuffix(input("delete_after_days", s.delete_after_days, { type: "number", min: 0, class: "input narrow" }), "days after posting (0 keeps files)"), "Deletes rendered files to save disk space. History stays."),
       checkbox("open_browser_on_start", s.open_browser_on_start, "Open this dashboard when Clipper starts")),
 
