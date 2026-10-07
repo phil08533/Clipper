@@ -62,12 +62,19 @@ def browser_executable(settings):
         return p.chromium.executable_path, "chromium"
 
 
+# Playwright always starts Chrome with these, which decide how saved logins (cookies) are encrypted on disk.
+# The sign-in window must match them exactly; otherwise on Linux the sign-in window encrypts cookies with the
+# desktop keyring, Playwright can't read them, and the account looks signed out every time it opens.
+LOGIN_ARGS = ["--password-store=basic", "--use-mock-keychain", "--no-first-run", "--no-default-browser-check", "--new-window"]
+
+
 def open_login_window(settings, account, url):
     """Launches a plain (non-automated) browser on the platform's profile and waits until the user closes it."""
     exe, _ = browser_executable(settings)
     d = profile_dir(account)
     d.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.Popen([exe, f"--user-data-dir={d}", "--no-first-run", "--no-default-browser-check", "--new-window", url])
+    proc = subprocess.Popen([exe, *LOGIN_ARGS, f"--user-data-dir={d}", url],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # keep Chrome's log noise out of Clipper's terminal
     proc.wait(timeout=3600)
 
 

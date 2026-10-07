@@ -418,3 +418,23 @@ def test_v1_database_migrates_accounts_posts_and_campaigns(tmp_path, monkeypatch
     assert sorted(cfg["accounts"]) == sorted([accts["youtube"]["id"], accts["tiktok"]["id"]]) and "platforms" not in cfg
     db.init()  # idempotent
     assert len(db.query("SELECT * FROM accounts")) == 2
+
+
+def test_login_window_uses_playwrights_cookie_encryption(monkeypatch, tmp_path):
+    """Regression: on Linux the sign-in window must use --password-store=basic like Playwright, or logins don't persist."""
+    seen = {}
+
+    class Proc:
+        def wait(self, timeout=None):
+            return 0
+
+    def popen(args, **kw):
+        seen["args"], seen["kw"] = args, kw
+        return Proc()
+
+    monkeypatch.setattr(base, "browser_executable", lambda s: ("/usr/bin/google-chrome", "chrome"))
+    monkeypatch.setattr(base.subprocess, "Popen", popen)
+    acct = publisher.create_account("tiktok", "T")
+    base.open_login_window({}, acct, "https://www.tiktok.com/login")
+    assert "--password-store=basic" in seen["args"] and "--use-mock-keychain" in seen["args"]
+    assert seen["kw"]["stderr"] is base.subprocess.DEVNULL
