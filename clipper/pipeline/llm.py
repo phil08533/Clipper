@@ -16,7 +16,8 @@ def chat(settings, system, user, json_mode=True, timeout=600):
     try:
         if provider == "ollama":
             body = {"model": settings["llm_model"], "messages": msgs, "stream": False,
-                    "options": {"temperature": settings["llm_temperature"]}}
+                    "options": {"temperature": settings["llm_temperature"]},
+                    "keep_alive": 0}  # unload straight away so the GPU is free for image generation
             if json_mode:
                 body["format"] = "json"
             r = httpx.post(f"{base}/api/chat", json=body, timeout=timeout)

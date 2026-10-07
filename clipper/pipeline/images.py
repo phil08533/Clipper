@@ -130,6 +130,16 @@ def generate(settings, prompt, out, seed=None):
         im.convert("RGB").save(out, "PNG")
 
 
+def release(settings):
+    """Ask ComfyUI to unload its model so the script model has the GPU for the next video."""
+    if settings["image_engine"] != "comfyui":
+        return
+    try:
+        httpx.post(settings["image_url"].rstrip("/") + "/free", json={"unload_models": True, "free_memory": True}, timeout=10)
+    except httpx.HTTPError:
+        pass
+
+
 def check(settings):
     engine = settings["image_engine"]
     if engine == "cards":

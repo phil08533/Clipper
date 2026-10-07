@@ -103,3 +103,5 @@ def produce(video_id):
     except Exception as e:  # noqa: BLE001 — any failure marks the video failed and is shown in the UI
         db.execute("UPDATE videos SET status='failed', error=?, updated_at=? WHERE id=?", (str(e)[:2000], db.now(), video_id))
         db.log("error", "generator", f"Generation failed: {e}", video_id)
+    finally:
+        images.release(s)
