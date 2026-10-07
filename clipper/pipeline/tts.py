@@ -15,7 +15,8 @@ def voice_path(setting):
     """The .onnx voice file; accepts the path to its .onnx.json too, since both sit side by side."""
     if not setting:
         return None
-    p = Path(setting.strip().strip('"').strip("'")).expanduser()
+    # Paths copied from a terminal often carry shell quotes (e.g. Documents/"GitHub Projects"/...); drop them.
+    p = Path(setting.strip().replace('"', "").replace("'", "")).expanduser()
     return p.with_suffix("") if p.name.endswith(".onnx.json") else p
 
 
