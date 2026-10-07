@@ -18,6 +18,8 @@ then posts.
   | Short Horror Stories | Original first-person horror with a twist (30 story seeds) |
   | What If…? | Science hypotheticals told second by second, then year by year (30 questions) |
   | A Day in History (POV) | "You are a Roman legionary…": immersive days from history (30 roles) |
+  | Insects & Bugs | One creature's strangest real ability, in macro-photo style (36 topics) |
+  | Animal Kingdom | Astonishing animal abilities, told like a wildlife documentary (39 topics) |
   | Original Story Series | An ongoing fantasy saga; each video is the next episode, with the story so far fed back in |
   | Start from scratch | Your own niche and prompt |
 
@@ -36,6 +38,9 @@ then posts.
 - **Review or full autopilot.** Videos can wait for your approval, or post with no human in the loop.
 - **Safe defaults.**
   - A per-account daily cap holds extra posts until the next day.
+  - While autopilot runs, each account's sign-in is re-checked in the background (every 12 hours by
+    default). If an account has signed out, its posts are held, not failed, and a banner tells you which
+    account to reconnect. Held posts go out once it's back.
   - Failed posts retry with back-off.
   - Uploads that can't be confirmed are never retried automatically, so nothing gets double-posted.
   - Failures save a screenshot.
@@ -116,8 +121,9 @@ Uploads to different accounts run in parallel.
   per platform: `clipper/uploaders/youtube.py`, `tiktok.py`, `instagram.py`.
 - **"Unconfirmed" posts.** Clipper clicked Post but couldn't see a success message. Check the account, then
   click **It posted** or **Retry** in the video's panel.
-- **Signed out.** When a session expires, posts to that platform stop and the account shows
-  *Not connected*. Click **Reconnect**.
+- **Signed out.** When a session expires, posts to that account are put on hold, not failed. The
+  account shows *Not connected* and the Overview shows a banner. Click **Reconnect**; held posts then go
+  out automatically.
 
 ## Project layout
 

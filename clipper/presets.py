@@ -150,8 +150,74 @@ Mystery: the whispers say the tree is not dead — it is sleeping, and something
 Tone: wonder with creeping dread. Each episode title starts with "Part N:".""",
         },
     },
+    {
+        "key": "insects",
+        "name": "Insects & Bugs",
+        "tagline": "The strangest real abilities of insects and spiders, up close.",
+        "prompt_name": "Insects & Bugs",
+        "prompt": """Make a short video about one real insect, spider or other bug and its most astonishing ability or behaviour, related to {niche}.
+The topic names the creature; if it is open, pick a remarkable, well-documented one.
+Open with the most surprising fact as a hook ("This beetle fires boiling chemicals from its rear").
+Then explain how it works, why it evolved, and one vivid detail of it in action. End with a question for the comments.
+Only state facts that are well established in biology. If a number is uncertain, say "about" or leave it out.
+Never invent studies, quotes or record figures. Tone: amazed but precise, like a nature documentary narrator.""",
+        "config": {
+            "niche": "insects, spiders and other bugs",
+            "visual_style": "extreme macro photography, shallow depth of field, crisp detail, natural light, dewdrops, nature documentary still",
+            "duration": 45, "scenes": 6, "caption_words": 3, "caption_position": "lower",
+            "extra_hashtags": "#insects #bugs #nature",
+            "topics": [
+                "the bombardier beetle's boiling chemical spray", "leafcutter ants farming fungus", "the trap-jaw ant's record-fast bite",
+                "the orchid mantis disguised as a flower", "honeybees' waggle dance", "the monarch butterfly migration",
+                "the zombie-ant fungus (Ophiocordyceps)", "tardigrades surviving space", "the peacock spider's courtship dance",
+                "dragonflies, the deadliest hunters", "army ant living bridges", "the diving bell spider's underwater air bubble",
+                "the jewel wasp that turns cockroaches into zombies", "fireflies' synchronised flashing", "dung beetles navigating by the Milky Way",
+                "the Japanese giant hornet vs honeybee heat ball", "termite mounds' natural air-conditioning", "the stick insect that can clone itself",
+                "the Goliath birdeater tarantula", "the water strider walking on water", "cicadas that wait 17 years underground",
+                "the assassin bug that wears its victims", "the atlas moth that never eats", "the froghopper, champion jumper",
+                "ant-mimicking jumping spiders", "the Portia spider that plans its attacks", "the hercules beetle's strength",
+                "the mayfly that lives for one day", "the honeypot ants storing food in their bodies", "the silk of the Darwin's bark spider",
+                "the cockroach that can live without its head", "the praying mantis' 3D vision", "the glasswing butterfly's transparent wings",
+                "the botfly's strange life cycle", "the ladybird's reflex bleeding", "the trapdoor spider's ambush",
+            ],
+        },
+    },
+    {
+        "key": "animals",
+        "name": "Animal Kingdom",
+        "tagline": "Astonishing animal abilities and behaviours, told like a wildlife documentary.",
+        "prompt_name": "Animal Kingdom",
+        "prompt": """Make a short video about one real animal and its most astonishing ability, behaviour or survival trick, related to {niche}.
+The topic names the animal and angle; if it is open, pick a remarkable, well-documented one.
+Open with the single most surprising fact as a hook. Then show the ability in action, explain how it works,
+and why it helps the animal survive. End with a question for the comments.
+Only state facts that are well established. Use "about" for approximate numbers, and never invent studies, quotes or records.
+Tone: a warm, gripping wildlife-documentary narrator. Avoid graphic descriptions of injury.""",
+        "config": {
+            "niche": "wild animals and their abilities",
+            "visual_style": "award-winning wildlife photography, telephoto lens, golden hour light, natural habitat, sharp focus, documentary realism",
+            "duration": 45, "scenes": 6, "caption_words": 3, "caption_position": "lower",
+            "extra_hashtags": "#animals #wildlife #nature",
+            "topics": [
+                "the octopus's three hearts and blue blood", "the mantis shrimp's punch", "the axolotl regrowing its limbs",
+                "the peregrine falcon's 300 km/h dive", "elephants mourning their dead", "the pistol shrimp's sonic bubble",
+                "the immortal jellyfish", "crows solving puzzles and remembering faces", "the arctic tern's pole-to-pole migration",
+                "the pangolin's armour", "the platypus's electric sense", "the wood frog that freezes solid and thaws",
+                "the cuttlefish's living camouflage", "humpback whales' bubble-net fishing", "the cheetah's acceleration",
+                "the naked mole-rat that barely ages", "dolphins calling each other by name", "the sloth's slow-motion life",
+                "the hummingbird's heartbeat", "the archerfish shooting water at insects", "the lyrebird that copies chainsaws",
+                "sea otters holding hands while sleeping", "the electric eel's shocks", "the snow leopard's tail",
+                "the mimic octopus impersonating other animals", "honey badgers' toughness", "the Greenland shark that lives 400 years",
+                "the gecko walking on ceilings", "the owl's silent flight", "the emperor penguin's winter huddle",
+                "the bar-tailed godwit's non-stop flight", "the chameleon's tongue", "the beaver as ecosystem engineer",
+                "the anglerfish's glowing lure", "the kangaroo's pouch and joey", "the hippo's 'blood sweat' sunscreen",
+                "the wolf pack's hunting strategy", "the bowerbird's decorated courtship stage", "the giraffe's blue tongue and heart",
+            ],
+        },
+    },
 ]
 
+PRESETS.sort(key=lambda p: p["key"] == "series")  # keep the series workflow last in the picker
 PRESETS_BY_KEY = {p["key"]: p for p in PRESETS}
 
 

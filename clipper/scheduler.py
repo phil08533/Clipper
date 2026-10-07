@@ -16,8 +16,8 @@ from . import db, publisher, settings as settings_mod
 from .pipeline import produce
 
 TICK_SECONDS = 20
-gen_q, post_q = queue.Queue(), queue.Queue()
-_queued_gen, _queued_post = set(), set()
+gen_q, post_q, check_q = queue.Queue(), queue.Queue(), queue.Queue()
+_queued_gen, _queued_post, _queued_check = set(), set(), set()
 _qlock = threading.Lock()
 _notified = set()                # one-off log messages already shown
 state = {"generating": None, "posting": [], "last_tick": None}
@@ -67,6 +67,52 @@ def _gen_worker():
             state["generating"] = None
             with _qlock:
                 _queued_gen.discard(vid)
+
+
+def enqueue_check(account_id):
+    with _qlock:
+        if account_id in _queued_check:
+            return
+        _queued_check.add(account_id)
+    check_q.put(account_id)
+
+
+def _check_worker():
+    """Background sign-in checks, one browser at a time so they never compete with uploads for resources."""
+    while True:
+        aid = check_q.get()
+        try:
+            publisher.check_account(aid, background=True)
+        except Exception as e:  # noqa: BLE001
+            db.log("error", "accounts", f"Sign-in check crashed: {e}")
+        finally:
+            with _qlock:
+                _queued_check.discard(aid)
+
+
+def accounts_in_use():
+    ids = set()
+    for camp in db.query("SELECT config FROM campaigns WHERE enabled=1"):
+        ids.update(db.loads(camp["config"], {}).get("accounts", []))
+    return ids
+
+
+def check_sessions(force=False):
+    """Queues a sign-in check for each account used by an active campaign whose last check is too old."""
+    hours = settings_mod.get("session_check_hours")
+    if hours <= 0 and not force:
+        return 0
+    cutoff = db.now() - hours * 3600
+    queued, in_use = 0, accounts_in_use()
+    for a in db.query("SELECT id, status, checked_at FROM accounts"):
+        if a["id"] not in in_use and not force:
+            continue
+        if a["status"] in ("checking", "login_open"):
+            continue
+        if force or a["checked_at"] is None or a["checked_at"] < cutoff:
+            enqueue_check(a["id"])
+            queued += 1
+    return queued
 
 
 def _post_worker():
@@ -223,6 +269,8 @@ def _loop():
     while True:
         try:
             tick()
+            if settings_mod.get("autopilot"):
+                check_sessions()
             if time.time() - last_house > 3600:
                 housekeeping()
                 last_house = time.time()
@@ -233,6 +281,8 @@ def _loop():
 
 def recover():
     """After a crash/restart: resume interrupted generations; never blindly re-post interrupted uploads."""
+    db.execute("UPDATE accounts SET status='error', note='Sign-in check was interrupted — checking again', checked_at=NULL "
+               "WHERE status IN ('checking','login_open')")
     for v in db.query("SELECT id FROM videos WHERE status IN ('queued','generating')"):
         db.execute("UPDATE videos SET status='queued' WHERE id=?", (v["id"],))
         enqueue_generation(v["id"])
@@ -245,5 +295,5 @@ def recover():
 def start():
     recover()
     workers = max(1, int(settings_mod.get("parallel_uploads")))
-    for target in [_gen_worker, _loop] + [_post_worker] * workers:
+    for target in [_gen_worker, _check_worker, _loop] + [_post_worker] * workers:
         threading.Thread(target=target, daemon=True).start()

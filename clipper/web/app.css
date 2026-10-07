@@ -302,6 +302,12 @@ table.table { width: 100%; border-collapse: collapse; }
 .seg-opt input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: -2px; }
 [hidden] { display: none !important; }
 
+.alert { display: flex; align-items: center; gap: 12px; padding: 12px 16px; margin-bottom: 16px; border-radius: var(--radius); background: var(--amber-bg); color: var(--text); border: 1px solid color-mix(in srgb, var(--amber) 35%, transparent); }
+.alert > .icon { color: var(--amber); width: 18px; height: 18px; }
+.alert strong { display: block; }
+.badge.warn { background: var(--amber); color: #fff; }
+.warn-text { color: var(--amber); }
+
 /* ---------- toasts ---------- */
 .toasts { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 60; }
 .toast { background: var(--primary); color: var(--primary-text); padding: 10px 14px; border-radius: 8px; box-shadow: var(--shadow-lg); max-width: 380px; animation: rise 0.16s ease-out; }

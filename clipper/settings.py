@@ -33,6 +33,7 @@ DEFAULT_SETTINGS = {
     "headless": False,
     "max_posts_per_account": 6,          # safety cap: posts per account per day
     "parallel_uploads": 2,               # accounts that may upload at the same time
+    "session_check_hours": 12,           # re-check each account's sign-in this often (0 = only when posting)
     "delete_after_days": 14,             # delete video files this long after posting (0 = keep)
     "open_browser_on_start": True,
 }

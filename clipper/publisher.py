@@ -10,6 +10,8 @@ from .uploaders import PLATFORMS, base
 
 MAX_ATTEMPTS = 3
 FINAL = ("posted", "unconfirmed", "skipped")
+HOLD_SECONDS = 1800               # how often a post held for a signed-out account is looked at again
+_hold_logged = set()              # (video, account) holds already reported, to keep the log readable
 
 
 def build_post(video, cfg, platform):
@@ -51,18 +53,31 @@ def account_status(account_id, status, note=None):
     db.execute("UPDATE accounts SET status=?, note=?, checked_at=? WHERE id=?", (status, note, db.now(), account_id))
 
 
-def check_account(account_id):
+def check_account(account_id, background=False):
+    """Opens the account's profile and confirms it is still signed in. Returns True when it is."""
     acct = get_account(account_id)
     if not acct:
-        return
-    account_status(account_id, "checking")
+        return False
+    was = acct["status"]
+    account_status(account_id, "checking", acct["note"])
     try:
-        with base.session(settings_mod.get_all(), acct) as page:
+        with base.session(settings_mod.get_all(), acct, headless=True if background else None) as page:
             ok = PLATFORMS[acct["platform"]].is_logged_in(page)
-        account_status(account_id, "connected" if ok else "not_connected", None if ok else "Not signed in")
     except Exception as e:  # noqa: BLE001
-        account_status(account_id, "error", str(e)[:500])
-        db.log("error", acct["platform"], f"{acct['label']}: account check failed: {e}")
+        account_status(account_id, "error", f"Sign-in check failed: {str(e)[:400]}")
+        db.log("error", acct["platform"], f"{acct['label']}: sign-in check failed: {e}")
+        return False
+    if ok:
+        account_status(account_id, "connected", None)
+        # Release anything held while it was signed out.
+        db.execute("UPDATE posts SET next_attempt_at=NULL, error=NULL WHERE account_id=? AND status='pending'", (account_id,))
+        if was != "connected" and background:
+            db.log("info", acct["platform"], f"{acct['label']}: signed in again — held posts will go out")
+        return True
+    account_status(account_id, "not_connected", "Signed out — click Reconnect. Posts to this account are on hold.")
+    if was == "connected":
+        db.log("error", acct["platform"], f"{acct['label']}: signed out. Posts to it are on hold until you reconnect it on the Accounts page.")
+    return False
 
 
 def connect_account(account_id):
@@ -170,6 +185,13 @@ def publish(video_id, account_ids=None, manual=False):
         row = db.one("SELECT * FROM posts WHERE video_id=? AND account_id=?", (video_id, aid))
         if row["status"] in FINAL:
             continue
+        if not manual and acct["status"] == "not_connected":
+            # Safe posting: don't burn retries (or trip platform defences) on an account we know is signed out.
+            _set_post(video_id, aid, next_attempt_at=db.now() + HOLD_SECONDS, error="On hold: account is signed out — reconnect it")
+            if (video_id, aid) not in _hold_logged:
+                _hold_logged.add((video_id, aid))
+                db.log("warn", p, f"{who}: signed out, so this post is on hold until you reconnect the account", video_id)
+            continue
         if not manual and posted_today(aid) >= s["max_posts_per_account"]:
             tomorrow = datetime.datetime.combine(datetime.date.today() + datetime.timedelta(days=1), datetime.time(8)).timestamp()
             _set_post(video_id, aid, next_attempt_at=tomorrow)
@@ -188,9 +210,11 @@ def publish(video_id, account_ids=None, manual=False):
             _set_post(video_id, aid, status="unconfirmed", error=str(e))
             db.log("warn", p, f"{who}: {e}. Check the account and mark it posted or retry from the Library.", video_id)
         except base.NotLoggedIn as e:
-            _set_post(video_id, aid, status="failed", attempts=MAX_ATTEMPTS, error=str(e))
-            account_status(aid, "not_connected", str(e))
-            db.log("error", p, f"{who}: {e}", video_id)
+            # Not the video's fault: hold it (without using up an attempt) until the account is reconnected.
+            _set_post(video_id, aid, status="pending", attempts=row["attempts"], next_attempt_at=db.now() + HOLD_SECONDS,
+                      error="On hold: account is signed out — reconnect it")
+            account_status(aid, "not_connected", "Signed out — click Reconnect. Posts to this account are on hold.")
+            db.log("error", p, f"{who}: {e}. Posts to it are on hold until you reconnect it.", video_id)
         except Exception as e:  # noqa: BLE001
             retry_at = db.now() + 900 * attempts if attempts < MAX_ATTEMPTS else None
             _set_post(video_id, aid, status="failed", error=str(e)[:1500], next_attempt_at=retry_at)

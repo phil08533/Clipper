@@ -24,6 +24,10 @@ def tmp_db(tmp_path, monkeypatch):
     db.init()
     settings.seed()
     scheduler._queued_gen.clear()
+    scheduler._queued_check.clear()
+    publisher._hold_logged.clear()
+    while not scheduler.check_q.empty():
+        scheduler.check_q.get_nowait()
     scheduler._queued_post.clear()
     scheduler._notified.clear()
     while not scheduler.gen_q.empty():
@@ -33,8 +37,10 @@ def tmp_db(tmp_path, monkeypatch):
     yield
 
 
-def make_account(platform="youtube", label=None):
-    return publisher.create_account(platform, label or platform)["id"]
+def make_account(platform="youtube", label=None, status="connected"):
+    aid = publisher.create_account(platform, label or platform)["id"]
+    publisher.account_status(aid, status)
+    return aid
 
 
 def make_campaign(**cfg):
@@ -184,14 +190,53 @@ def test_unconfirmed_is_not_retried(fakes):
     assert db.one("SELECT status FROM videos WHERE id=?", (vid,))["status"] == "check"
 
 
-def test_logged_out_marks_account_and_stops(fakes):
+def test_signed_out_during_post_holds_without_using_attempts(fakes):
     fakes["youtube"].behaviour = "logged_out"
     yt = make_account("youtube")
-    publisher.account_status(yt, "connected")
     vid = make_video(make_campaign(accounts=[yt]))
     publisher.publish(vid)
     assert db.one("SELECT status FROM accounts WHERE id=?", (yt,))["status"] == "not_connected"
-    assert db.one("SELECT status FROM videos WHERE id=?", (vid,))["status"] == "post_failed"
+    row = post_rows(vid)[yt]
+    assert row["status"] == "pending" and row["attempts"] == 0 and row["next_attempt_at"] > db.now()
+    assert db.one("SELECT status FROM videos WHERE id=?", (vid,))["status"] == "retrying"
+
+
+def test_known_signed_out_account_is_skipped_not_attempted(fakes):
+    yt = make_account("youtube", status="not_connected")
+    tt = make_account("tiktok")
+    vid = make_video(make_campaign(accounts=[yt, tt]))
+    publisher.publish(vid)
+    assert fakes["youtube"].calls == [] and len(fakes["tiktok"].calls) == 1
+    assert "On hold" in post_rows(vid)[yt]["error"]
+
+
+def test_reconnect_releases_held_posts(fakes, monkeypatch):
+    yt = make_account("youtube", status="not_connected")
+    vid = make_video(make_campaign(accounts=[yt]))
+    publisher.publish(vid)
+    assert post_rows(vid)[yt]["next_attempt_at"] is not None
+    monkeypatch.setattr(fakes["youtube"], "is_logged_in", lambda page: True, raising=False)
+    assert publisher.check_account(yt, background=True) is True
+    assert post_rows(vid)[yt]["next_attempt_at"] is None
+    publisher.publish(vid)
+    assert len(fakes["youtube"].calls) == 1
+
+
+def test_check_sessions_only_queues_stale_accounts_in_active_campaigns():
+    used, unused, fresh = make_account("youtube"), make_account("tiktok"), make_account("instagram")
+    db.execute("UPDATE accounts SET checked_at=? WHERE id IN (?,?)", (db.now() - 13 * 3600, used, unused))
+    make_campaign(accounts=[used, fresh])  # fresh was checked just now by make_account
+    assert scheduler.check_sessions() == 1
+    assert scheduler.check_q.get_nowait() == used
+    scheduler._queued_check.clear()
+    assert scheduler.check_sessions(force=True) == 3
+
+
+def test_recover_resets_interrupted_checks():
+    aid = make_account("youtube", status="checking")
+    scheduler.recover()
+    row = db.one("SELECT status, checked_at FROM accounts WHERE id=?", (aid,))
+    assert row["status"] == "error" and row["checked_at"] is None
 
 
 def test_per_account_cap_holds_until_tomorrow(fakes):
@@ -319,7 +364,9 @@ def test_every_preset_produces_a_valid_campaign(monkeypatch):
         out = server.apply_preset(p["key"])
         cfg = out["config"]
         assert cfg["prompt_id"] and cfg["preset"] == p["key"] and cfg["schedule_mode"] == "random"
+        assert p["key"] == "series" or len(cfg["topics"]) >= 30
         assert db.one("SELECT name FROM prompts WHERE id=?", (cfg["prompt_id"],))["name"] == p["prompt_name"]
+    assert {"insects", "animals"} <= {p["key"] for p in presets.PRESETS} and presets.PRESETS[-1]["key"] == "series"
     server.apply_preset("mythology")  # applying twice reuses the prompt
     assert db.one("SELECT COUNT(*) n FROM prompts WHERE name='Mythology & Folklore'")["n"] == 1
 

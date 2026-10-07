@@ -48,6 +48,13 @@ def _campaign_out(c):
     return c
 
 
+def _attention():
+    """Accounts used by active campaigns that can't post right now."""
+    in_use = scheduler.accounts_in_use()
+    return [a for a in db.query("SELECT id, platform, label, status, note FROM accounts WHERE status IN ('not_connected','error') ORDER BY label")
+            if a["id"] in in_use]
+
+
 # ---------- overview ----------
 
 @app.get("/api/overview")
@@ -63,6 +70,7 @@ def overview():
                              datetime.datetime.combine(datetime.date.today(), datetime.time()).timestamp()),
         "account_cap": s["max_posts_per_account"],
         "accounts": db.one("SELECT COUNT(*) n FROM accounts")["n"],
+        "attention": _attention(),
         "stats": {
             "posted_7d": stat("SELECT COUNT(*) n FROM posts WHERE status='posted' AND updated_at>=?", week),
             "ready": stat("SELECT COUNT(*) n FROM videos WHERE status IN ('ready','approved')"),
@@ -314,6 +322,11 @@ def remove_account(aid: int):
     publisher.get_account(aid) or _404()
     publisher.delete_account(aid)
     return {"ok": True}
+
+
+@app.post("/api/accounts/check-all")
+def check_all_accounts():
+    return {"queued": scheduler.check_sessions(force=True)}
 
 
 @app.post("/api/accounts/{aid}/{action}")

@@ -140,14 +140,15 @@ const NAV = [
   ["prompts", "Prompts"], ["accounts", "Accounts"], ["activity", "Activity"], ["settings", "Settings"],
 ];
 
-let shellData = { autopilot: false, review: 0, nextPost: null };
+let shellData = { autopilot: false, review: 0, nextPost: null, attention: 0 };
 
 function renderNav() {
   const section = (location.hash.split("/")[1] || "overview");
   const nav = document.getElementById("nav");
   nav.replaceChildren(...NAV.map(([key, label]) =>
     h("a", { href: `#/${key}`, class: section === key ? "active" : "" }, icon(key), label,
-      key === "library" && shellData.review ? h("span", { class: "badge", title: "Awaiting review" }, shellData.review) : null)));
+      key === "library" && shellData.review ? h("span", { class: "badge", title: "Awaiting review" }, shellData.review) : null,
+      key === "accounts" && shellData.attention ? h("span", { class: "badge warn", title: "Accounts that need signing in" }, shellData.attention) : null)));
 
   const ap = document.getElementById("autopilot");
   const on = shellData.autopilot;
@@ -167,7 +168,7 @@ async function refreshShell() {
   try {
     const o = await GET("/api/overview");
     const next = o.campaigns.filter((c) => c.enabled && c.next_post_at).map((c) => c.next_post_at).sort()[0];
-    shellData = { autopilot: o.autopilot, review: o.stats.review, nextPost: next || null };
+    shellData = { autopilot: o.autopilot, review: o.stats.review, nextPost: next || null, attention: o.attention.length };
   } catch {}
   renderNav();
 }
@@ -238,6 +239,7 @@ async function pageOverview(root, token) {
   if (isStale(token)) return;
 
   const kpis = h("div", { class: "kpis" });
+  const banner = h("div");
   const upNext = h("div");
   const recent = h("div");
   const now = h("div");
@@ -246,6 +248,7 @@ async function pageOverview(root, token) {
 
   root.replaceChildren(
     pageHead("Overview", "What Clipper is doing and what happens next.", [h("a", { class: "btn primary", href: "#/campaigns/new" }, icon("plus"), "New campaign")]),
+    banner,
     kpis,
     h("div", { class: "grid-2" },
       h("div", { class: "stack" },
@@ -257,6 +260,13 @@ async function pageOverview(root, token) {
         card("Activity", activity, h("a", { class: "btn ghost sm", href: "#/activity" }, "View all")))));
 
   function fill(o) {
+    banner.replaceChildren(o.attention.length ? h("div", { class: "alert" },
+      icon("alert"),
+      h("div", { class: "grow" },
+        h("strong", {}, o.attention.length === 1 ? "1 account needs signing in" : `${o.attention.length} accounts need signing in`),
+        h("div", {}, o.attention.map((a) => `${a.label} (${PLATFORM_NAMES[a.platform]})`).join(", "),
+          ". Posts to ", o.attention.length === 1 ? "it" : "them", " are on hold — nothing is lost.")),
+      h("a", { class: "btn", href: "#/accounts" }, "Reconnect")) : "");
     kpis.replaceChildren(
       kpi("Posted today", o.posted_today, `Cap ${o.account_cap} per account per day`),
       kpi("Posted, last 7 days", o.stats.posted_7d, "Across all platforms"),
@@ -850,7 +860,8 @@ async function pageAccounts(root, token) {
             h("div", { class: "muted small" },
               `${a.posted} posted · ${a.posted_today} today`,
               a.campaigns.length ? ` · used by ${a.campaigns.join(", ")}` : " · not used by any campaign"),
-            a.note ? h("div", { class: "muted small" }, a.note) : null),
+            h("div", { class: "small " + (["not_connected", "error"].includes(a.status) && a.campaigns.length ? "warn-text" : "muted") },
+              a.note || (a.checked_at ? `Sign-in checked ${rel(a.checked_at)}` : "Sign-in not checked yet"))),
           pill(ACCOUNT_STATUS, a.status),
           h("div", { class: "row" },
             h("button", { class: "btn sm", disabled: busy, onclick: run("check", "Checking sign-in…") }, "Check"),
@@ -862,13 +873,18 @@ async function pageAccounts(root, token) {
       }))))
       : [card(null, emptyState("No accounts yet", "Add one above for each channel you want to post to. You can add several per platform."))]));
   }
+  const checkAll = h("button", { class: "btn", onclick: async () => {
+    const r = await attempt(() => api("POST", "/api/accounts/check-all"));
+    if (r) { toast(r.queued ? `Checking ${r.queued} account${r.queued === 1 ? "" : "s"} in the background` : "No accounts to check"); setTimeout(load, 800); }
+  } }, icon("refresh"), "Check all now");
   root.replaceChildren(
-    pageHead("Accounts", "Add as many accounts as you like — several per platform is fine. Each one keeps its own sign-in."),
+    pageHead("Accounts", "Add as many accounts as you like — several per platform is fine. Each one keeps its own sign-in.", [checkAll]),
     card(null, h("div", { class: "card-body" }, addForm)),
     h("div", { class: "note-box", style: "margin:16px 0" },
       "Connect opens a normal browser window for that account only. Sign in as you usually do (including two-step verification), then close the window. ",
       "Each account's session lives in its own folder under data/browser_profiles — Clipper never stores passwords. ",
-      "For YouTube, if one Google login owns several channels, switch to the right channel before closing the window; each account remembers its channel."),
+      "For YouTube, if one Google login owns several channels, switch to the right channel before closing the window; each account remembers its channel. ",
+      "While autopilot runs, Clipper re-checks each account's sign-in in the background (see Settings → Posting). If one has signed out, its posts wait instead of failing."),
     wrap);
   await load();
   return { refresh: load };
@@ -952,6 +968,8 @@ async function pageSettings(root, token) {
         "Extra posts wait until the next day. Keeps any one account from looking like a bot."),
       field("Parallel uploads", withSuffix(input("parallel_uploads", s.parallel_uploads, { type: "number", min: 1, max: 8, class: "input narrow" }), "accounts at once"),
         "How many accounts may upload at the same time. Each opens its own browser. Takes effect after restarting Clipper."),
+      field("Sign-in checks", withSuffix(input("session_check_hours", s.session_check_hours, { type: "number", min: 0, max: 168, class: "input narrow" }), "hours between checks (0 = off)"),
+        "While autopilot runs, accounts used by active campaigns are re-checked in a hidden browser this often. Signed-out accounts have their posts held, not failed."),
       field("Clean up", withSuffix(input("delete_after_days", s.delete_after_days, { type: "number", min: 0, class: "input narrow" }), "days after posting (0 keeps files)"), "Deletes rendered files to save disk space. History stays."),
       checkbox("open_browser_on_start", s.open_browser_on_start, "Open this dashboard when Clipper starts")),
 
