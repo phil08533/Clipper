@@ -16,6 +16,7 @@ Name the culture the story comes from in the first two scenes.
 Retell the traditional version faithfully. Do not invent new events, characters or quotes.
 Narration style: a campfire storyteller, vivid and plain-spoken, short sentences, present tense where it heightens tension.""",
         "config": {
+            "voice": "bm_george",
             "niche": "world mythology and folklore",
             "visual_style": "dark fantasy oil painting, dramatic chiaroscuro lighting, mythic atmosphere, rich texture, highly detailed",
             "duration": 50, "scenes": 7, "caption_words": 3, "caption_position": "middle",
@@ -46,6 +47,7 @@ Build dread with specific, ordinary details. No gore; fear comes from implicatio
 The final scene must deliver a twist that recontextualises the story, in one short sentence.
 Fiction only: never reference real crimes, real victims or real people.""",
         "config": {
+            "voice": "am_fenrir",
             "niche": "psychological and supernatural horror",
             "visual_style": "eerie cinematic still, low-key lighting, desaturated colours, fog, film grain, unsettling composition, no people's faces visible",
             "duration": 55, "scenes": 7, "caption_words": 2, "caption_position": "middle",
@@ -77,6 +79,7 @@ Walk through the consequences in time order: the first seconds, hours, days, yea
 Base it on real science and say "scientists think" or "probably" where things are uncertain.
 End with the most surprising consequence and a one-line question for the comments.""",
         "config": {
+            "voice": "am_michael",
             "niche": "science, space and nature",
             "visual_style": "epic cinematic concept art, photorealistic, wide angle, volumetric light, dramatic sky, highly detailed",
             "duration": 50, "scenes": 7, "caption_words": 3, "caption_position": "middle",
@@ -107,6 +110,7 @@ Every scene needs one concrete, true historical detail. Only include details you
 prefer common, well-documented facts over obscure claims, and never invent quotes or statistics.
 End with how the day ends and one surprising fact about how long people like you usually lived.""",
         "config": {
+            "voice": "bm_fable",
             "niche": "everyday life through history",
             "visual_style": "historically accurate painterly scene, natural light, documentary realism, period costume and architecture, highly detailed",
             "duration": 55, "scenes": 7, "caption_words": 3, "caption_position": "lower",
@@ -136,6 +140,7 @@ Each episode is self-contained enough to follow, but advances the main plot by o
 Open with a one-line recap hook, then one tense scene, and end on a cliffhanger that makes viewers want the next part.
 Introduce at most one new character per episode.""",
         "config": {
+            "voice": "bm_lewis",
             "niche": "the Hollow Kingdom",
             "visual_style": "painterly dark fantasy illustration, consistent colour palette of deep blues and amber, cinematic framing, highly detailed",
             "duration": 50, "scenes": 6, "caption_words": 3, "caption_position": "middle",
@@ -162,6 +167,7 @@ Then explain how it works, why it evolved, and one vivid detail of it in action.
 Only state facts that are well established in biology. If a number is uncertain, say "about" or leave it out.
 Never invent studies, quotes or record figures. Tone: amazed but precise, like a nature documentary narrator.""",
         "config": {
+            "voice": "af_heart",
             "niche": "insects, spiders and other bugs",
             "visual_style": "extreme macro photography, shallow depth of field, crisp detail, natural light, dewdrops, nature documentary still",
             "duration": 45, "scenes": 6, "caption_words": 3, "caption_position": "lower",
@@ -194,6 +200,7 @@ and why it helps the animal survive. End with a question for the comments.
 Only state facts that are well established. Use "about" for approximate numbers, and never invent studies, quotes or records.
 Tone: a warm, gripping wildlife-documentary narrator. Avoid graphic descriptions of injury.""",
         "config": {
+            "voice": "am_michael",
             "niche": "wild animals and their abilities",
             "visual_style": "award-winning wildlife photography, telephoto lens, golden hour light, natural habitat, sharp focus, documentary realism",
             "duration": 45, "scenes": 6, "caption_words": 3, "caption_position": "lower",

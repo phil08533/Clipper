@@ -97,6 +97,23 @@ def render_scene(settings, image, voice, duration, out, motion):
                    "-map", "0:v", "-map", "1:a", *video_args(settings), *AUDIO_ARGS, out])
 
 
+def render_clip_scene(settings, frames_dir, clip_fps, voice, duration, out):
+    """An animated scene: the AI clip (slowed slightly if short), then its last frame held, all under a gentle zoom
+    so the hold never looks frozen. Upscales the clip to full 1080x1920."""
+    fps = settings["fps"]
+    n = len(list(Path(frames_dir).glob("f_*.png")))
+    clip_len = n / clip_fps
+    slow = min(1.35, max(1.0, duration / clip_len))
+    frames = math.ceil(duration * fps)
+    vf = (f"scale={int(W * 1.5)}:{int(H * 1.5)}:force_original_aspect_ratio=increase:flags=lanczos,"
+          f"crop={int(W * 1.5)}:{int(H * 1.5)},setpts={slow:.3f}*PTS,fps={fps},"
+          f"tpad=stop_mode=clone:stop_duration={duration:.3f},"
+          f"zoompan=z='1+0.06*on/{frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={W}x{H}:fps={fps},setsar=1")
+    audio = ["-i", voice] if voice else ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"]
+    run(settings, ["-y", "-framerate", clip_fps, "-i", Path(frames_dir) / "f_%05d.png", *audio, "-vf", vf, "-af", "apad",
+                   "-t", f"{duration:.3f}", "-map", "0:v", "-map", "1:a", *video_args(settings), *AUDIO_ARGS, out])
+
+
 def adjust_voice(settings, src, out):
     speed = min(max(float(settings["tts_speed"]), 0.5), 2.0)
     run(settings, ["-y", "-i", src, "-af", f"atempo={speed:.3f}", "-ar", "44100", "-ac", "2", out])

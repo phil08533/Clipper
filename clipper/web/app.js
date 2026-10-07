@@ -439,8 +439,8 @@ const DAYS = [[0, "Mon"], [1, "Tue"], [2, "Wed"], [3, "Thu"], [4, "Fri"], [5, "S
 
 async function pageCampaignEdit(root, idParam, token, presetKey) {
   const isNew = idParam === "new";
-  const [prompts, defaults, accounts, camp, preset] = await Promise.all([
-    GET("/api/prompts"), GET("/api/campaigns/defaults"), GET("/api/accounts"),
+  const [prompts, defaults, accounts, voices, camp, preset] = await Promise.all([
+    GET("/api/prompts"), GET("/api/campaigns/defaults"), GET("/api/accounts"), GET("/api/voices"),
     isNew ? null : GET(`/api/campaigns/${idParam}`).catch(() => null),
     isNew && presetKey && presetKey !== "blank" ? api("POST", `/api/presets/${presetKey}/apply`).catch(() => null) : null]);
   if (isStale(token)) return;
@@ -496,6 +496,7 @@ async function pageCampaignEdit(root, idParam, token, presetKey) {
       field("Extra hashtags", input("extra_hashtags", cfg.extra_hashtags, { placeholder: "#space #science" }), "Added to every post, after the model's own hashtags.")),
 
     section("Look and sound", "Image style, captions and background music.",
+      field("Narrator voice", select("voice", cfg.voice, [["", "Default (from Settings)"], ...voices.map((v) => [v.id, v.label])]), "Used when the voice engine in Settings is Kokoro."),
       field("Visual style", input("visual_style", cfg.visual_style), "Appended to every image prompt."),
       h("div", { class: "field-row" },
         field("Words per caption", select("caption_words", cfg.caption_words, [[1, "1 word"], [2, "2 words"], [3, "3 words"], [4, "4 words"]])),
@@ -562,6 +563,7 @@ async function pageCampaignEdit(root, idParam, token, presetKey) {
         duration: num("duration"), scenes: num("scenes"),
         extra_hashtags: fd.get("extra_hashtags"),
         visual_style: fd.get("visual_style"),
+        voice: fd.get("voice"),
         caption_words: num("caption_words"), caption_position: fd.get("caption_position"),
         caption_uppercase: form.elements.caption_uppercase.checked,
         music_dir: fd.get("music_dir").trim(), music_volume: num("music_volume") / 100,
@@ -920,7 +922,7 @@ async function pageActivity(root, token) {
    ============================================================ */
 
 async function pageSettings(root, token) {
-  const s = await GET("/api/settings");
+  const [s, voices] = await Promise.all([GET("/api/settings"), GET("/api/voices")]);
   if (isStale(token)) return;
   const models = h("datalist", { id: "llm-models" });
   const loadModels = async () => {
@@ -931,7 +933,8 @@ async function pageSettings(root, token) {
     } catch (e) { toast(e.message, "error"); }
   };
 
-  const showWhen = (name, values) => ({ dataset: { showName: name, showValues: values.join(",") } });
+  const showWhen = (name, values, also) => ({ dataset: { showName: name, showValues: values.join(","), ...(also ? { showAlso: also } : {}) } });
+  const animOn = "animate_mode:hook,all";
 
   const form = h("form", { onsubmit: (e) => e.preventDefault() },
     section("Script model", "The local language model that writes titles, narration and image prompts.",
@@ -952,10 +955,26 @@ async function pageSettings(root, token) {
       field("Steps", input("image_steps", s.image_steps, { type: "number", min: 1, max: 150, class: "input narrow" }), null, showWhen("image_engine", ["comfyui", "a1111"])),
       field("Negative prompt", h("textarea", { class: "input", name: "negative_prompt", rows: 2, value: s.negative_prompt }), null, showWhen("image_engine", ["comfyui", "a1111"]))),
 
-    section("Voice", "Text-to-speech for the narration.",
-      field("Engine", select("tts_engine", s.tts_engine, [["piper", "Piper (recommended, local neural voices)"], ["system", "System voice (Windows SAPI / macOS / espeak)"], ["none", "No voiceover"]])),
-      field("Piper voice", input("piper_model", s.piper_model, { placeholder: "C:\\Clipper\\voices\\en_US-ryan-high.onnx" }), "Path to a downloaded .onnx voice (keep its .onnx.json next to it).", showWhen("tts_engine", ["piper"])),
-      field("Speaking speed", withSuffix(input("tts_speed", s.tts_speed, { type: "number", min: 0.5, max: 2, step: 0.05, class: "input narrow" }), "× (1.0 = natural)"), null, showWhen("tts_engine", ["piper", "system"]))),
+    section("Voice", "Text-to-speech for the narration. Kokoro sounds the most human and runs on the processor, so it doesn't slow image generation.",
+      field("Engine", select("tts_engine", s.tts_engine, [["kokoro", "Kokoro (most natural)"], ["piper", "Piper (lighter, more robotic)"], ["system", "System voice (espeak / Windows SAPI)"], ["none", "No voiceover"]])),
+      field("Default voice", select("kokoro_voice", s.kokoro_voice, voices.map((v) => [v.id, v.label])), "Campaigns can pick their own voice. The voice model downloads once on first use (~330 MB).", showWhen("tts_engine", ["kokoro"])),
+      field("Piper voice", input("piper_model", s.piper_model, { placeholder: "~/Clipper/voices/en_US-ryan-high.onnx" }), "Path to a downloaded .onnx voice (keep its .onnx.json next to it).", showWhen("tts_engine", ["piper"])),
+      field("Speaking speed", withSuffix(input("tts_speed", s.tts_speed, { type: "number", min: 0.5, max: 2, step: 0.05, class: "input narrow" }), "× (1.0 = natural)"), null, showWhen("tts_engine", ["kokoro", "piper", "system"]))),
+
+    section("Animation", "Turn still scenes into short AI video clips with ComfyUI. Slower to render; a failed clip falls back to the still image.",
+      field("Animate", select("animate_mode", s.animate_mode, [["off", "Off — still images with a slow zoom"], ["hook", "First scene only (the hook) — recommended"], ["all", "Every scene"]]),
+        "The first second decides whether people keep watching, so animating just the hook gets most of the benefit for a fraction of the render time."),
+      field("Model", select("video_model", s.video_model, [["ltx", "LTX-Video 2B — fast (about 1 min per clip)"], ["wan22", "Wan 2.2 5B — better motion, slower (several min per clip)"]]), null, showWhen("animate_mode", ["hook", "all"])),
+      field("ComfyUI address", input("video_url", s.video_url), null, showWhen("animate_mode", ["hook", "all"])),
+      h("div", Object.assign({ class: "field-row" }, showWhen("video_model", ["ltx"], animOn)),
+        field("LTX model file", input("ltx_checkpoint", s.ltx_checkpoint), "In ComfyUI/models/checkpoints"),
+        field("Text encoder", input("ltx_text_encoder", s.ltx_text_encoder), "In ComfyUI/models/text_encoders")),
+      h("div", Object.assign({ class: "field-row" }, showWhen("video_model", ["wan22"], animOn)),
+        field("Wan model file", input("wan_model", s.wan_model), "In ComfyUI/models/diffusion_models"),
+        field("Text encoder", input("wan_text_encoder", s.wan_text_encoder), "In ComfyUI/models/text_encoders")),
+      field("Wan VAE", input("wan_vae", s.wan_vae), "In ComfyUI/models/vae", showWhen("video_model", ["wan22"], animOn)),
+      field("Custom workflow", input("video_workflow_path", s.video_workflow_path, { placeholder: "Optional: path to an API-format image-to-video workflow .json" }),
+        "Placeholders: {{image}}, {{prompt}}, {{negative}}, {{seed}}, {{width}}, {{height}}, {{length}}, {{fps}}. It must output every frame as images.", showWhen("animate_mode", ["hook", "all"]))),
 
     section("Video", "Rendering with ffmpeg.",
       h("div", { class: "field-row" }, field("ffmpeg", input("ffmpeg_path", s.ffmpeg_path)), field("ffprobe", input("ffprobe_path", s.ffprobe_path))),
@@ -976,9 +995,10 @@ async function pageSettings(root, token) {
     h("div", { class: "sticky-save" }, h("span", { class: "grow" }), h("button", { class: "btn primary", type: "submit", onclick: save }, "Save settings")));
 
   function syncVisibility() {
+    const ok = (name, values) => values.split(",").includes(form.elements[name].value);
     form.querySelectorAll("[data-show-name]").forEach((el) => {
-      const ctl = form.elements[el.dataset.showName];
-      el.hidden = !el.dataset.showValues.split(",").includes(ctl.value);
+      const [alsoName, alsoValues] = (el.dataset.showAlso || "").split(":");
+      el.hidden = !ok(el.dataset.showName, el.dataset.showValues) || (alsoName && !ok(alsoName, alsoValues));
     });
   }
   form.addEventListener("change", syncVisibility);

@@ -19,8 +19,19 @@ DEFAULT_SETTINGS = {
     "image_height": 1344,
     "image_steps": 25,
     "negative_prompt": "text, watermark, logo, signature, blurry, low quality, deformed, extra fingers",
+    # Animation (image-to-video through ComfyUI)
+    "animate_mode": "off",               # off | hook (first scene only) | all
+    "video_model": "ltx",                # ltx (fast) | wan22 (better, slower)
+    "video_url": "http://127.0.0.1:8188",
+    "ltx_checkpoint": "ltx-video-2b-v0.9.5.safetensors",
+    "ltx_text_encoder": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+    "wan_model": "wan2.2_ti2v_5B_fp16.safetensors",
+    "wan_text_encoder": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+    "wan_vae": "wan2.2_vae.safetensors",
+    "video_workflow_path": "",           # optional custom API-format image-to-video workflow
     # Voice
-    "tts_engine": "piper",               # piper | system | none
+    "tts_engine": "kokoro",              # kokoro | piper | system | none
+    "kokoro_voice": "am_michael",
     "piper_model": "",                   # path to a Piper .onnx voice
     "tts_speed": 1.05,
     # Video
@@ -65,6 +76,7 @@ DEFAULT_CAMPAIGN = {
     "youtube_visibility": "public",      # public | unlisted | private
     "ai_label": True,                    # tick each platform's AI-generated disclosure
     "extra_hashtags": "",
+    "voice": "",                         # Kokoro voice for this campaign ("" = the one in Settings)
     "series_bible": "",                  # non-empty = episodic series; previous episodes are fed back in
     "preset": "",                        # which ready-made workflow this campaign started from
 }

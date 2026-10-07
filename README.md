@@ -72,6 +72,38 @@ then posts.
 A GPU with 8 GB+ VRAM is comfortable for SDXL. With SD 1.5, 4–6 GB is enough. A 45-second, 6-scene video
 usually takes 1–5 minutes on a mid-range GPU.
 
+## Optional: animated scenes (image-to-video)
+
+Settings → **Animation** turns still scenes into short AI clips through ComfyUI. **First scene only** is
+recommended: the hook gets motion and the render stays fast. Download one model set into your ComfyUI folder:
+
+**LTX-Video 2B** (fast, about 1 minute per clip on an 8 GB card):
+```bash
+cd ~/ComfyUI/models
+wget -P checkpoints    https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltx-video-2b-v0.9.5.safetensors
+wget -P text_encoders  https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn_scaled.safetensors
+```
+
+**Wan 2.2 5B** (better motion, several minutes per clip):
+```bash
+cd ~/ComfyUI/models
+wget -P diffusion_models https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors
+wget -P text_encoders    https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors
+wget -P vae              https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/vae/wan2.2_vae.safetensors
+```
+
+Restart ComfyUI after downloading. The Overview's *System check → Animation* line confirms the files are found.
+If a clip fails, for example because the GPU runs out of memory, that scene falls back to the still image and the
+video still completes. Both models use ComfyUI's built-in nodes; keep ComfyUI up to date (`git pull` in its folder).
+
+## Voices
+
+**Kokoro** is the default voice engine and sounds far more natural than Piper. `run.sh` / `run.bat` install it
+automatically. It runs on the CPU, so it never competes with ComfyUI for the GPU. The voice model (~330 MB)
+downloads on first use. Pick a default voice in Settings, and a different one per campaign if you like; each
+ready-made workflow comes with a matching narrator. Kokoro needs Python 3.10–3.12; on other versions Clipper falls
+back to Piper.
+
 ## Install and run
 
 **Windows:** double-click `run.bat`. **macOS/Linux:** `./run.sh`.

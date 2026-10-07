@@ -366,6 +366,12 @@ def put_settings(body: dict = Body(...)):
         raise HTTPException(400, f"Invalid value: {e}") from e
 
 
+@app.get("/api/voices")
+def voices():
+    from .pipeline import tts
+    return [{"id": v, "label": label} for v, label in tts.KOKORO_VOICES]
+
+
 @app.get("/api/llm/models")
 def llm_models():
     try:

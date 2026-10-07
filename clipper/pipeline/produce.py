@@ -4,7 +4,7 @@ import random
 import shutil
 
 from .. import db, settings as settings_mod
-from . import images, render, script, tts
+from . import animate, images, render, script, tts
 
 
 def _template(cfg):
@@ -46,6 +46,8 @@ def produce(video_id):
         return
     cfg = settings_mod.campaign_config(db.loads(campaign["config"], {}))
     s = settings_mod.get_all()
+    if cfg["voice"] and s["tts_engine"] == "kokoro":
+        s["kokoro_voice"] = cfg["voice"]
     workdir = db.VIDEOS_DIR / str(video_id)
     shutil.rmtree(workdir, ignore_errors=True)
     workdir.mkdir(parents=True)
@@ -66,15 +68,33 @@ def produce(video_id):
                    (sc["title"], sc["description"], json.dumps(list(dict.fromkeys(tags))), sc["topic"] or topic,
                     json.dumps(sc), db.now(), video_id))
 
-        timed, scene_files, t = [], [], 0.0
-        motions = ["in", "out", "left", "right"]
-        random.shuffle(motions)
         n = len(sc["scenes"])
+        # 1. All stills first, then all animation, so ComfyUI swaps models once per video instead of per scene.
+        stills = []
         for i, scene in enumerate(sc["scenes"]):
             stage(f"Scene {i + 1} of {n}: image")
             img = workdir / f"scene_{i}.png"
             images.generate(s, f"{scene['visual']}, {cfg['visual_style']}", img)
+            stills.append(img)
 
+        clips = {}
+        animate_scenes = [i for i in range(n) if animate.wanted(s, i)]
+        for i in animate_scenes:
+            scene = sc["scenes"][i]
+            stage(f"Scene {i + 1} of {n}: animating with {animate.MODELS.get(s['video_model'], {}).get('name', 'AI video')}")
+            motion = scene.get("motion") or "subtle natural movement, slow cinematic camera push-in"
+            try:
+                fps = animate.animate(s, stills[i], f"{motion}. {scene['visual']}, {cfg['visual_style']}",
+                                      workdir / f"anim_{i}", f"clipper_{video_id}_{i}.png")
+                clips[i] = (workdir / f"anim_{i}", fps)
+            except Exception as e:  # noqa: BLE001 — never lose a video over animation; fall back to the still
+                db.log("warn", "generator", f"Scene {i + 1}: animation failed, using the still image instead — {e}", video_id)
+
+        # 2. Voice and per-scene render.
+        timed, scene_files, t = [], [], 0.0
+        motions = ["in", "out", "left", "right"]
+        random.shuffle(motions)
+        for i, scene in enumerate(sc["scenes"]):
             stage(f"Scene {i + 1} of {n}: voice")
             raw, voice = workdir / f"voice_{i}_raw.wav", workdir / f"voice_{i}.wav"
             if tts.synthesize(s, scene["narration"], raw):
@@ -85,9 +105,12 @@ def produce(video_id):
             dur = speech + 0.35
             timed.append((t, speech, scene["narration"]))
 
-            stage(f"Scene {i + 1} of {n}: animating")
+            stage(f"Scene {i + 1} of {n}: rendering")
             clip = workdir / f"scene_{i}.mp4"
-            render.render_scene(s, img, voice, dur, clip, motions[i % 4])
+            if i in clips:
+                render.render_clip_scene(s, clips[i][0], clips[i][1], voice, dur, clip)
+            else:
+                render.render_scene(s, stills[i], voice, dur, clip, motions[i % 4])
             scene_files.append(clip)
             t += dur
 
@@ -96,6 +119,8 @@ def produce(video_id):
         render.finalize(s, cfg, workdir, scene_files, t)
         for p in workdir.glob("voice_*_raw.wav"):
             p.unlink()
+        for d in workdir.glob("anim_*"):
+            shutil.rmtree(d, ignore_errors=True)
         status = "needs_review" if cfg["review"] else "ready"
         db.execute("UPDATE videos SET status=?, duration=?, error=NULL, updated_at=? WHERE id=?",
                    (status, round(t, 1), db.now(), video_id))

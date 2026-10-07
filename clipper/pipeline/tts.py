@@ -1,10 +1,27 @@
-"""Voiceover. Piper (local neural TTS) or the operating system's built-in voice."""
+"""Voiceover: Kokoro (most natural), Piper (lighter), or the operating system's built-in voice."""
 import subprocess
 import sys
 import wave
 from pathlib import Path
 
 _piper_cache = {}
+_kokoro_cache = {}
+
+# Kokoro-82M voices worth using for narration (first letter: a = American, b = British; second: f/m).
+KOKORO_VOICES = [
+    ("am_michael", "Michael — American male, warm narrator"),
+    ("am_fenrir", "Fenrir — American male, deep and dramatic"),
+    ("am_puck", "Puck — American male, upbeat"),
+    ("af_heart", "Heart — American female, natural and warm"),
+    ("af_bella", "Bella — American female, expressive"),
+    ("af_nicole", "Nicole — American female, soft and close"),
+    ("bm_george", "George — British male, documentary"),
+    ("bm_fable", "Fable — British male, storyteller"),
+    ("bm_lewis", "Lewis — British male, deep"),
+    ("bf_emma", "Emma — British female, clear"),
+    ("bf_isabella", "Isabella — British female, warm"),
+]
+KOKORO_RATE = 24000
 
 
 class TTSError(RuntimeError):
@@ -52,12 +69,44 @@ def _system(text, out):
         raise TTSError("System voice failed (pip install pyttsx3; on Linux also install espeak-ng): " + r.stderr[-400:])
 
 
+def _kokoro(text, out, voice):
+    try:
+        import numpy as np
+        from kokoro import KPipeline  # type: ignore
+    except ImportError as e:
+        raise TTSError("Kokoro is not installed. Restart Clipper with ./run.sh to install it.") from e
+    voice = voice or "am_michael"
+    lang = voice[0] if voice[:1] in ("a", "b") else "a"
+    pipe = _kokoro_cache.get(lang)
+    if pipe is None:
+        # CPU keeps the graphics card free for image/video generation; Kokoro is fast enough there.
+        pipe = _kokoro_cache[lang] = KPipeline(lang_code=lang, repo_id="hexgrad/Kokoro-82M", device="cpu")
+    chunks = [r.audio.detach().cpu().numpy() for r in pipe(text, voice=voice, speed=1.0) if r.audio is not None]
+    if not chunks:
+        raise TTSError("Kokoro produced no audio for this text")
+    pcm = (np.clip(np.concatenate(chunks), -1.0, 1.0) * 32767).astype("<i2")
+    with wave.open(str(out), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(KOKORO_RATE)
+        wf.writeframes(pcm.tobytes())
+
+
 def synthesize(settings, text, out):
     """Writes speech to `out` (wav). Returns False when TTS is disabled."""
     engine = settings["tts_engine"]
     if engine == "none":
         return False
-    if engine == "piper":
+    if engine == "kokoro":
+        try:
+            _kokoro(text, out, settings["kokoro_voice"])
+        except TTSError:
+            # Kokoro unavailable (e.g. not installable on this Python): use Piper if one is set up rather than fail.
+            piper = voice_path(settings["piper_model"])
+            if not (piper and piper.is_file()):
+                raise
+            _piper(text, out, settings["piper_model"])
+    elif engine == "piper":
         _piper(text, out, settings["piper_model"])
     elif engine == "system":
         _system(text, out)
@@ -70,6 +119,13 @@ def check(settings):
     engine = settings["tts_engine"]
     if engine == "none":
         return True, "Voiceover disabled — videos use music and captions only"
+    if engine == "kokoro":
+        try:
+            import kokoro  # noqa: F401  # type: ignore
+        except ImportError:
+            return False, "Kokoro not installed — restart Clipper with ./run.sh to install it"
+        label = dict(KOKORO_VOICES).get(settings["kokoro_voice"], settings["kokoro_voice"])
+        return True, f"Kokoro · {label.split(' —')[0]} (first use downloads the voice model, ~330 MB)"
     if engine == "piper":
         try:
             import piper.voice  # noqa: F401  # type: ignore

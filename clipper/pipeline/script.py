@@ -12,7 +12,8 @@ Reply with ONLY a JSON object, no commentary, in exactly this shape:
   "hashtags": ["5 to 8 relevant hashtags without the # sign"],
   "scenes": [
     {"narration": "what the voiceover says in this scene (1-3 short sentences)",
-     "visual": "a concrete visual description for an image generator: subject, setting, composition. No text or words in the image."}
+     "visual": "a concrete visual description for an image generator: subject, setting, composition. No text or words in the image.",
+     "motion": "how this shot moves for a 4-second clip: what moves and how the camera moves (e.g. 'waves roll in, camera slowly pushes forward')"}
   ]
 }
 Rules: write narration to be spoken aloud; no emojis, stage directions or scene labels in narration;
@@ -80,7 +81,8 @@ def validate(data, scenes_wanted):
         "description": str(data.get("description") or "").strip(),
         "hashtags": tags[:10],
         "scenes": [{"narration": str(s["narration"]).strip(),
-                    "visual": str(s.get("visual") or s["narration"]).strip()} for s in scenes[:12]],
+                    "visual": str(s.get("visual") or s["narration"]).strip(),
+                    "motion": str(s.get("motion") or "").strip()} for s in scenes[:12]],
     }
 
 

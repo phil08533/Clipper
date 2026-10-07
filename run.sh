@@ -28,4 +28,17 @@ elif ! .venv/bin/python -c "import fastapi, playwright" 2>/dev/null || [ require
 fi
 touch .venv/.installed
 
+# Kokoro (natural voice) is optional: it needs Python 3.10-3.12. CPU-only PyTorch keeps it small and leaves the GPU to ComfyUI.
+if ! .venv/bin/python -c "import kokoro" 2>/dev/null && [ ! -f .venv/.kokoro-tried ]; then
+  echo "Installing the Kokoro voice (one time, a few minutes)..."
+  if .venv/bin/python -m pip install -q torch --index-url https://download.pytorch.org/whl/cpu \
+     && .venv/bin/python -m pip install -q "kokoro>=0.9.4"; then
+    .venv/bin/python -m spacy download en_core_web_sm >/dev/null 2>&1 || true  # otherwise fetched on first use
+    echo "Kokoro installed."
+  else
+    echo "Note: Kokoro couldn't be installed (it needs Python 3.10-3.12). Piper and the system voice still work."
+  fi
+  touch .venv/.kokoro-tried
+fi
+
 exec .venv/bin/python -m clipper "$@"

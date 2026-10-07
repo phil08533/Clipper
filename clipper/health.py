@@ -3,7 +3,7 @@ import shutil
 import subprocess
 
 from . import db, settings as settings_mod
-from .pipeline import images, llm, tts
+from .pipeline import animate, images, llm, tts
 
 
 def _ffmpeg(s):
@@ -37,7 +37,7 @@ def _playwright():
 
 def run():
     s = settings_mod.get_all()
-    checks = [("Video engine", *_ffmpeg(s)), ("Script model", *_llm(s)), ("Image engine", *images.check(s)),
+    checks = [("Video engine", *_ffmpeg(s)), ("Script model", *_llm(s)), ("Image engine", *images.check(s)), ("Animation", *animate.check(s)),
               ("Voice", *tts.check(s)), ("Browser automation", *_playwright()), ("Accounts", *_accounts())]
     return {"checks": [{"name": n, "ok": ok, "detail": d} for n, ok, d in checks]}
 

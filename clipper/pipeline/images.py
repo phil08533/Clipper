@@ -41,6 +41,46 @@ def _fill(node, values):
     return node
 
 
+def comfy_error(history):
+    """The human-readable reason ComfyUI gives for a failed run (e.g. out of GPU memory)."""
+    for kind, data in history.get("status", {}).get("messages", []):
+        if kind == "execution_error":
+            return f"{data.get('node_type', 'a node')}: {data.get('exception_message', '').strip()[:400]}"
+    return "unknown error"
+
+
+def comfy_run(base, graph, timeout=900, error=RuntimeError):
+    """Queues an API-format graph and waits for it. Returns the output image records of the node with the most images."""
+    try:
+        r = httpx.post(f"{base}/prompt", json={"prompt": graph, "client_id": "clipper"}, timeout=30)
+        if r.status_code >= 400:
+            raise error(f"ComfyUI rejected the workflow: {r.text[:600]}")
+        pid = r.json()["prompt_id"]
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            time.sleep(1.5)
+            h = httpx.get(f"{base}/history/{pid}", timeout=30).json().get(pid)
+            if not h:
+                continue
+            if h.get("status", {}).get("status_str") == "error":
+                raise error(f"ComfyUI failed — {comfy_error(h)}")
+            if not h.get("status", {}).get("completed", True):
+                continue
+            outputs = [o.get("images", []) for o in h.get("outputs", {}).values()]
+            best = max(outputs, key=len, default=[])
+            if best:
+                return best
+            raise error("ComfyUI finished but produced no images")
+        raise error(f"ComfyUI took longer than {timeout // 60} minutes")
+    except httpx.HTTPError as e:
+        raise error(f"Cannot reach ComfyUI at {base}: {e}") from e
+
+
+def comfy_fetch(base, img):
+    return httpx.get(f"{base}/view", params={"filename": img["filename"], "subfolder": img.get("subfolder", ""),
+                                             "type": img.get("type", "output")}, timeout=120).content
+
+
 def _comfy(settings, prompt, out, seed):
     base = settings["image_url"].rstrip("/")
     wf_path = settings["comfy_workflow_path"]
@@ -50,30 +90,11 @@ def _comfy(settings, prompt, out, seed):
         "steps": settings["image_steps"], "width": settings["image_width"], "height": settings["image_height"],
         "checkpoint": settings["comfy_checkpoint"],
     })
+    imgs = comfy_run(base, graph, 900, ImageError)
     try:
-        r = httpx.post(f"{base}/prompt", json={"prompt": graph, "client_id": "clipper"}, timeout=30)
-        if r.status_code >= 400:
-            raise ImageError(f"ComfyUI rejected the workflow: {r.text[:500]}")
-        pid = r.json()["prompt_id"]
-        deadline = time.time() + 900
-        while time.time() < deadline:
-            time.sleep(1.5)
-            h = httpx.get(f"{base}/history/{pid}", timeout=30).json().get(pid)
-            if not h:
-                continue
-            status = h.get("status", {})
-            if status.get("status_str") == "error":
-                raise ImageError("ComfyUI reported an error while generating")
-            for node_out in h.get("outputs", {}).values():
-                for img in node_out.get("images", []):
-                    data = httpx.get(f"{base}/view", params={
-                        "filename": img["filename"], "subfolder": img.get("subfolder", ""), "type": img.get("type", "output")},
-                        timeout=60).content
-                    Path(out).write_bytes(data)
-                    return
-        raise ImageError("ComfyUI timed out")
+        Path(out).write_bytes(comfy_fetch(base, imgs[0]))
     except httpx.HTTPError as e:
-        raise ImageError(f"Cannot reach ComfyUI at {base}: {e}") from e
+        raise ImageError(f"Cannot download the image from ComfyUI: {e}") from e
 
 
 def _a1111(settings, prompt, out, seed):
