@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import db, health, presets, publisher, scheduler, settings as settings_mod
@@ -388,6 +388,20 @@ app.mount("/screenshots", StaticFiles(directory=db.SHOTS_DIR), name="screenshots
 app.mount("/static", StaticFiles(directory=WEB), name="static")
 
 
+@app.middleware("http")
+async def no_stale_dashboard(request, call_next):
+    """Browsers cache the dashboard's JS/CSS; make them re-check so an update shows up without a hard refresh."""
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.get("/")
 def index():
-    return FileResponse(WEB / "index.html")
+    # Version the asset URLs by file time so a changed app.js/app.css is always fetched fresh.
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    for name in ("app.js", "app.css"):
+        stamp = int((WEB / name).stat().st_mtime)
+        html = html.replace(f"/static/{name}", f"/static/{name}?v={stamp}")
+    return HTMLResponse(html)
