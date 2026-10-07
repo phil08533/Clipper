@@ -24,6 +24,7 @@ Requirements:
 - Niche: {niche}
 - Topic: {topic_line}
 - Exactly {scenes} scenes. Total narration about {words} words (~{duration} seconds spoken).
+- Each scene's narration must be {per_scene_lo}-{per_scene_hi} words (two or three full sentences). Short scenes make the video too short.
 - Today is {date}.
 {avoid}{series}"""
 
@@ -53,6 +54,7 @@ def render_user_prompt(template, niche, topic, scenes, duration, recent_titles, 
         niche=niche or "general interest",
         topic_line=topic or "choose a fresh, specific topic that fits the niche",
         scenes=scenes, words=words, duration=duration,
+        per_scene_lo=max(8, int(words / scenes * 0.85)), per_scene_hi=max(12, int(words / scenes * 1.2)),
         date=datetime.date.today().strftime("%B %d, %Y"),
         avoid=avoid,
         series=series_block(series),
