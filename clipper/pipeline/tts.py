@@ -11,8 +11,16 @@ class TTSError(RuntimeError):
     pass
 
 
+def voice_path(setting):
+    """The .onnx voice file; accepts the path to its .onnx.json too, since both sit side by side."""
+    if not setting:
+        return None
+    p = Path(setting.strip().strip('"').strip("'")).expanduser()
+    return p.with_suffix("") if p.name.endswith(".onnx.json") else p
+
+
 def _piper(text, out, model_path):
-    model_path = str(Path(model_path).expanduser()) if model_path else ""
+    model_path = str(voice_path(model_path) or "")
     if not model_path or not Path(model_path).is_file():
         raise TTSError("Piper voice model not found. Set the .onnx path in Settings > Voice.")
     try:
@@ -66,7 +74,7 @@ def check(settings):
             import piper.voice  # noqa: F401  # type: ignore
         except ImportError:
             return False, "piper-tts not installed"
-        model = Path(settings["piper_model"]).expanduser() if settings["piper_model"] else None
+        model = voice_path(settings["piper_model"])
         if not model or not model.is_file():
             return False, "Piper voice file not found — check the path in Settings > Voice"
         if not model.with_name(model.name + ".json").is_file():
