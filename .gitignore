@@ -3,3 +3,6 @@ data/
 __pycache__/
 *.pyc
 .pytest_cache/
+# downloaded Piper voices (too large for GitHub) and test audio
+voices/
+*.wav
