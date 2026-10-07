@@ -2,8 +2,10 @@
 import argparse
 import atexit
 import os
+import shutil
 import signal
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -80,6 +82,15 @@ def _free_port(port):
     sys.exit("Couldn't stop the old Clipper. Close the window running it and try again.")
 
 
+def _open_dashboard(url):
+    """Open the dashboard without the browser's own log noise ending up in Clipper's terminal."""
+    opener = shutil.which("xdg-open") if sys.platform.startswith("linux") else None
+    if opener:
+        subprocess.Popen([opener, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    else:
+        webbrowser.open(url)
+
+
 def _remove_pid_file():
     try:
         if PID_FILE.read_text().strip() == str(os.getpid()):
@@ -105,7 +116,7 @@ def main():
     url = f"http://127.0.0.1:{args.port}"
     print(f"Clipper is running at {url}  (Ctrl+C to stop)", flush=True)
     if settings.get("open_browser_on_start") and not args.no_browser:
-        threading.Timer(1.5, webbrowser.open, (url,)).start()
+        threading.Timer(1.5, _open_dashboard, (url,)).start()
     from .server import app
     uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
 
